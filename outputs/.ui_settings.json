@@ -1,0 +1,6 @@
+{
+  "url": "https://docs.oracle.com/en/database/oracle/mongodb-api/mgapi/support-mongodb-apis-operations-and-data-types-reference.html",
+  "timeout": 60,
+  "max_retries": 3,
+  "show_debug_log": false
+}
