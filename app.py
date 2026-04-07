@@ -13,8 +13,47 @@ from src.oracle_feature_support.fetcher import INDEX_URL, TARGET_URL, analyze_fe
 SETTINGS_PATH = Path("outputs/.ui_settings.json")
 
 st.set_page_config(page_title="Oracle MongoDB API Feature Support", layout="wide")
-st.title("Oracle MongoDB API - Feature Support")
-st.caption("手工点击按钮后才会执行抓取与统计")
+st.markdown(
+    """
+    <style>
+    .block-container {
+        padding-top: 1.4rem;
+        padding-bottom: 2.5rem;
+        max-width: 1280px;
+    }
+    .app-hero {
+        background: linear-gradient(135deg, #0f3b45 0%, #176b72 56%, #2f8f83 100%);
+        border-radius: 8px;
+        color: #ffffff;
+        padding: 1.4rem 1.6rem;
+        margin-bottom: 1rem;
+    }
+    .app-hero h1 {
+        font-size: 2rem;
+        line-height: 1.2;
+        margin: 0 0 0.35rem 0;
+    }
+    .app-hero p {
+        color: #d9f2ee;
+        margin: 0;
+    }
+    div[data-testid="stMetric"] {
+        background: #f6f8fa;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 0.85rem 1rem;
+    }
+    div[data-testid="stDataFrame"] {
+        border-radius: 8px;
+    }
+    </style>
+    <div class="app-hero">
+        <h1>Oracle MongoDB API - Feature Support</h1>
+        <p>手工触发抓取，跟踪 Oracle 文档版本，汇总 MongoDB API 支持情况。</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 if "result_detail_df" not in st.session_state:
     st.session_state.result_detail_df = None
@@ -46,12 +85,25 @@ if not st.session_state.settings_loaded:
     st.session_state.ui_show_debug = bool(saved_settings.get("show_debug_log", True))
     st.session_state.settings_loaded = True
 
-with st.form("run_form", clear_on_submit=False):
-    url = st.text_input("目标链接", key="ui_url")
-    timeout = st.number_input("请求超时（秒）", min_value=10, max_value=180, step=5, key="ui_timeout")
-    max_retries = st.number_input("重试次数", min_value=0, max_value=6, step=1, key="ui_max_retries")
-    show_debug_log = st.checkbox("显示执行日志（排查问题）", key="ui_show_debug")
-    submitted = st.form_submit_button("开始抓取并分析", type="primary")
+with st.container(border=True):
+    st.markdown("#### 抓取设置")
+    with st.form("run_form", clear_on_submit=False):
+        url = st.text_input("目标链接", key="ui_url")
+        form_cols = st.columns([1, 1, 1.2, 1])
+        with form_cols[0]:
+            timeout = st.number_input(
+                "请求超时（秒）", min_value=10, max_value=180, step=5, key="ui_timeout"
+            )
+        with form_cols[1]:
+            max_retries = st.number_input(
+                "重试次数", min_value=0, max_value=6, step=1, key="ui_max_retries"
+            )
+        with form_cols[2]:
+            show_debug_log = st.checkbox("显示执行日志（排查问题）", key="ui_show_debug")
+        with form_cols[3]:
+            st.write("")
+            st.write("")
+            submitted = st.form_submit_button("开始抓取并分析", type="primary")
 
 log_container = st.empty()
 
@@ -179,6 +231,39 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
     doc_metadata = st.session_state.doc_metadata or {}
     has_metric = "metric" in summary_df.columns
 
+    status_summary_df_raw = (
+        summary_df[summary_df["metric"] == "normalized_status"].copy()
+        if has_metric
+        else summary_df.copy()
+    )
+    status_summary_df = status_summary_df_raw[["normalized_status", "count", "percentage"]]
+
+    support_top_display_df = pd.DataFrame()
+    section_display_df = pd.DataFrame()
+    if has_metric:
+        support_top_df = summary_df[summary_df["metric"] == "support_value_top20"].copy()
+        if not support_top_df.empty:
+            support_top_display_df = support_top_df.rename(
+                columns={"normalized_status": "support_since"}
+            )
+            support_top_display_df = support_top_display_df[
+                ["support_since", "count", "percentage"]
+            ]
+
+        section_df = summary_df[summary_df["metric"] == "section_count"].copy()
+        if not section_df.empty:
+            section_display_df = section_df.rename(columns={"normalized_status": "section"})
+            section_display_df = section_display_df[["section", "count", "percentage"]]
+
+    st.markdown("### 总览")
+    overview_cols = st.columns([1, 1, 1.4])
+    with overview_cols[0]:
+        st.metric("明细记录数", len(detail_df))
+    with overview_cols[1]:
+        st.metric("文档版本时间", doc_metadata.get("doc_version_date", "") or "未解析到")
+    with overview_cols[2]:
+        st.metric("文档编号", doc_metadata.get("doc_id", "") or "未解析到")
+
     if st.session_state.restored_from_disk:
         last_refresh_time = datetime.fromtimestamp(Path(output_dir).stat().st_mtime).strftime(
             "%Y-%m-%d %H:%M:%S"
@@ -188,79 +273,69 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
         st.success(f"分析完成，结果已保存到: {output_dir}")
 
     if doc_metadata:
-        doc_cols = st.columns(2)
-        with doc_cols[0]:
-            st.metric("文档版本时间", doc_metadata.get("doc_version_date", "") or "未解析到")
-        with doc_cols[1]:
-            st.metric("文档编号", doc_metadata.get("doc_id", "") or "未解析到")
         st.caption(f"版本信息来源: {INDEX_URL}")
-
         update_status = doc_metadata.get("update_status", "")
         if "发现文档版本变化" in update_status:
             st.warning(update_status)
         elif update_status:
             st.info(update_status)
 
-    status_summary_df_raw = (
-        summary_df[summary_df["metric"] == "normalized_status"].copy()
-        if has_metric
-        else summary_df.copy()
-    )
-    status_summary_df = status_summary_df_raw[["normalized_status", "count", "percentage"]]
+    st.markdown("### 统计分析")
+    chart_cols = st.columns([1.05, 0.95])
 
-    st.metric("明细记录数", len(detail_df))
-
-    st.subheader("API 支持汇总")
-    st.dataframe(status_summary_df, use_container_width=True, height=220)
-    status_color_domain = ["Supported", "Not Supported", "Partially Supported", "Other"]
-    status_color_range = ["#2E8B57", "#D9534F", "#F0AD4E", "#7A7A7A"]
-    status_chart = (
-        alt.Chart(status_summary_df)
-        .mark_bar()
-        .encode(
-            x=alt.X("normalized_status:N", title="Status"),
-            y=alt.Y("count:Q", title="Count"),
-            color=alt.Color(
-                "normalized_status:N",
-                scale=alt.Scale(domain=status_color_domain, range=status_color_range),
-                legend=None,
-            ),
-            tooltip=["normalized_status", "count", "percentage"],
-        )
-    )
-    st.altair_chart(status_chart, use_container_width=True)
-
-    if has_metric:
-        support_top_df = summary_df[summary_df["metric"] == "support_value_top20"].copy()
-        if not support_top_df.empty:
-            st.subheader("Oracle 启始支持的版本")
-            support_top_display_df = support_top_df.rename(
-                columns={"normalized_status": "support_since"}
-            )
-            support_top_display_df = support_top_display_df[
-                ["support_since", "count", "percentage"]
-            ]
-            st.dataframe(support_top_display_df, use_container_width=True, height=280)
-            pie_data = support_top_display_df.copy()
-            pie_data["support_since"] = pie_data["support_since"].astype(str)
-            pie_chart = (
-                alt.Chart(pie_data)
-                .mark_arc()
+    with chart_cols[0]:
+        with st.container(border=True):
+            st.subheader("API 支持汇总")
+            st.dataframe(status_summary_df, use_container_width=True, height=220)
+            status_color_domain = ["Supported", "Not Supported", "Partially Supported", "Other"]
+            status_color_range = ["#2E8B57", "#D9534F", "#F0AD4E", "#7A7A7A"]
+            status_chart = (
+                alt.Chart(status_summary_df)
+                .mark_bar(cornerRadiusEnd=3)
                 .encode(
-                    theta=alt.Theta(field="count", type="quantitative"),
-                    color=alt.Color(field="support_since", type="nominal", title="Support Since"),
-                    tooltip=["support_since", "count", "percentage"],
+                    x=alt.X("normalized_status:N", title="Status"),
+                    y=alt.Y("count:Q", title="Count"),
+                    color=alt.Color(
+                        "normalized_status:N",
+                        scale=alt.Scale(domain=status_color_domain, range=status_color_range),
+                        legend=None,
+                    ),
+                    tooltip=["normalized_status", "count", "percentage"],
                 )
             )
-            st.altair_chart(pie_chart, use_container_width=True)
+            st.altair_chart(status_chart, use_container_width=True)
 
-        section_df = summary_df[summary_df["metric"] == "section_count"].copy()
-        if not section_df.empty:
+    with chart_cols[1]:
+        with st.container(border=True):
+            st.subheader("Oracle 启始支持的版本")
+            if support_top_display_df.empty:
+                st.info("没有可展示的版本统计。")
+            else:
+                pie_data = support_top_display_df.copy()
+                pie_data["support_since"] = pie_data["support_since"].astype(str)
+                pie_chart = (
+                    alt.Chart(pie_data)
+                    .mark_arc(innerRadius=55)
+                    .encode(
+                        theta=alt.Theta(field="count", type="quantitative"),
+                        color=alt.Color(
+                            field="support_since",
+                            type="nominal",
+                            title="Support Since",
+                            scale=alt.Scale(scheme="tableau20"),
+                        ),
+                        tooltip=["support_since", "count", "percentage"],
+                    )
+                )
+                st.altair_chart(pie_chart, use_container_width=True)
+            if not support_top_display_df.empty:
+                st.dataframe(support_top_display_df, use_container_width=True, height=220)
+
+    if not section_display_df.empty:
+        with st.container(border=True):
             st.subheader("MongoDB 命令类型分布")
-            section_display_df = section_df.rename(columns={"normalized_status": "section"})
-            section_display_df = section_display_df[["section", "count", "percentage"]]
-            st.dataframe(section_display_df, use_container_width=True, height=280)
             section_chart_source = section_display_df.sort_values("count", ascending=False).copy()
+            section_chart_height = min(max(360, len(section_chart_source) * 22), 760)
             section_chart = (
                 alt.Chart(section_chart_source)
                 .mark_bar(cornerRadiusEnd=3)
@@ -274,35 +349,43 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
                     ),
                     tooltip=["section", "count", "percentage"],
                 )
+                .properties(height=section_chart_height)
             )
             st.altair_chart(section_chart, use_container_width=True)
+            st.dataframe(section_display_df, use_container_width=True, height=280)
 
-    st.subheader("Feature Support 明细")
-    if "section" in detail_df.columns:
-        grouped = detail_df.groupby("section", dropna=False, sort=False)
-        for section_name, sec_df in grouped:
-            section_text = str(section_name) if str(section_name).strip() else "Unknown Section"
-            with st.expander(f"{section_text} ({len(sec_df)} 条)", expanded=False):
-                sec_display_df = sec_df.drop(columns=["section"], errors="ignore")
-                sec_display_df = sec_display_df.drop(columns=["table_index"], errors="ignore")
-                sec_display_df = _drop_empty_columns(sec_display_df)
-                sec_display_df = _reorder_detail_columns(sec_display_df)
-                st.dataframe(sec_display_df, use_container_width=True, height=320)
-    else:
-        detail_display_df = detail_df.drop(columns=["table_index"], errors="ignore")
-        detail_display_df = _drop_empty_columns(detail_display_df)
-        detail_display_df = _reorder_detail_columns(detail_display_df)
-        st.dataframe(detail_display_df, use_container_width=True, height=500)
+    with st.container(border=True):
+        st.subheader("Feature Support 明细")
+        if "section" in detail_df.columns:
+            grouped = detail_df.groupby("section", dropna=False, sort=False)
+            for section_name, sec_df in grouped:
+                section_text = str(section_name) if str(section_name).strip() else "Unknown Section"
+                with st.expander(f"{section_text} ({len(sec_df)} 条)", expanded=False):
+                    sec_display_df = sec_df.drop(columns=["section"], errors="ignore")
+                    sec_display_df = sec_display_df.drop(columns=["table_index"], errors="ignore")
+                    sec_display_df = _drop_empty_columns(sec_display_df)
+                    sec_display_df = _reorder_detail_columns(sec_display_df)
+                    st.dataframe(sec_display_df, use_container_width=True, height=320)
+        else:
+            detail_display_df = detail_df.drop(columns=["table_index"], errors="ignore")
+            detail_display_df = _drop_empty_columns(detail_display_df)
+            detail_display_df = _reorder_detail_columns(detail_display_df)
+            st.dataframe(detail_display_df, use_container_width=True, height=500)
 
-    st.download_button(
-        "下载明细 CSV",
-        data=detail_df.to_csv(index=False).encode("utf-8-sig"),
-        file_name="feature_support_detail.csv",
-        mime="text/csv",
-    )
-    st.download_button(
-        "下载统计 CSV",
-        data=summary_df.to_csv(index=False).encode("utf-8-sig"),
-        file_name="feature_support_summary.csv",
-        mime="text/csv",
-    )
+    download_cols = st.columns([1, 1, 4])
+    with download_cols[0]:
+        st.download_button(
+            "下载明细 CSV",
+            data=detail_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="feature_support_detail.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    with download_cols[1]:
+        st.download_button(
+            "下载统计 CSV",
+            data=summary_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="feature_support_summary.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
