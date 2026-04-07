@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from src.oracle_feature_support.fetcher import TARGET_URL, analyze_feature_support
+from src.oracle_feature_support.fetcher import INDEX_URL, TARGET_URL, analyze_feature_support
 
 SETTINGS_PATH = Path("outputs/.ui_settings.json")
 
@@ -22,6 +22,8 @@ if "result_summary_df" not in st.session_state:
     st.session_state.result_summary_df = None
 if "result_output_dir" not in st.session_state:
     st.session_state.result_output_dir = None
+if "doc_metadata" not in st.session_state:
+    st.session_state.doc_metadata = {}
 if "debug_logs" not in st.session_state:
     st.session_state.debug_logs = []
 if "restore_attempted" not in st.session_state:
@@ -91,18 +93,25 @@ def _restore_last_result() -> bool:
 
     detail_path = latest_dir / "feature_support_detail.csv"
     summary_path = latest_dir / "feature_support_summary.csv"
+    metadata_path = latest_dir / "document_metadata.json"
     if not detail_path.exists() or not summary_path.exists():
         return False
 
     try:
         detail_df = pd.read_csv(detail_path, encoding="utf-8-sig")
         summary_df = pd.read_csv(summary_path, encoding="utf-8-sig")
+        doc_metadata = (
+            json.loads(metadata_path.read_text(encoding="utf-8"))
+            if metadata_path.exists()
+            else {}
+        )
     except Exception:  # noqa: BLE001
         return False
 
     st.session_state.result_detail_df = detail_df
     st.session_state.result_summary_df = summary_df
     st.session_state.result_output_dir = str(latest_dir)
+    st.session_state.doc_metadata = doc_metadata
     return True
 
 
@@ -141,6 +150,7 @@ if submitted:
     st.session_state.result_detail_df = None
     st.session_state.result_summary_df = None
     st.session_state.result_output_dir = None
+    st.session_state.doc_metadata = {}
 
     with st.spinner("正在抓取并分析，请稍候..."):
         try:
@@ -157,6 +167,7 @@ if submitted:
             st.session_state.result_detail_df = result.detail_df
             st.session_state.result_summary_df = result.summary_df
             st.session_state.result_output_dir = str(result.output_dir)
+            st.session_state.doc_metadata = result.doc_metadata
 
 if st.session_state.get("show_debug_log_runtime", True) and st.session_state.debug_logs:
     log_container.code("\n".join(st.session_state.debug_logs[-200:]), language="text")
@@ -165,6 +176,7 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
     detail_df = st.session_state.result_detail_df
     summary_df = st.session_state.result_summary_df
     output_dir = st.session_state.result_output_dir
+    doc_metadata = st.session_state.doc_metadata or {}
     has_metric = "metric" in summary_df.columns
 
     if st.session_state.restored_from_disk:
@@ -174,6 +186,20 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
         st.info(f"上次刷新时间: {last_refresh_time}")
     else:
         st.success(f"分析完成，结果已保存到: {output_dir}")
+
+    if doc_metadata:
+        doc_cols = st.columns(2)
+        with doc_cols[0]:
+            st.metric("文档版本时间", doc_metadata.get("doc_version_date", "") or "未解析到")
+        with doc_cols[1]:
+            st.metric("文档编号", doc_metadata.get("doc_id", "") or "未解析到")
+        st.caption(f"版本信息来源: {INDEX_URL}")
+
+        update_status = doc_metadata.get("update_status", "")
+        if "发现文档版本变化" in update_status:
+            st.warning(update_status)
+        elif update_status:
+            st.info(update_status)
 
     status_summary_df_raw = (
         summary_df[summary_df["metric"] == "normalized_status"].copy()

@@ -13,6 +13,7 @@
 - 自动归一化支持状态（`Supported` / `Partially Supported` / `Not Supported` / `Other`）
 - 生成统计汇总（数量与占比）
 - 导出明细和统计 CSV，并生成 `report.md`
+- 从文档首页提取文档编号和版本时间，用于辅助判断是否有更新内容
 - 可选显示执行日志（抓取重试、解析步骤、保存路径）用于排查问题
 
 ## 快速开始
@@ -36,6 +37,7 @@ streamlit run app.py
 
 - `feature_support_detail.csv`
 - `feature_support_summary.csv`
+- `document_metadata.json`
 - `report.md`
 
 ## 代码结构

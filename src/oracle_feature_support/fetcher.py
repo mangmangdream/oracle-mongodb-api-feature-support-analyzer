@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import json
 from pathlib import Path
+import re
 import time
 from typing import Callable, Iterable
 
@@ -14,6 +16,13 @@ TARGET_URL = (
     "https://docs.oracle.com/en/database/oracle/mongodb-api/"
     "mgapi/support-mongodb-apis-operations-and-data-types-reference.html"
 )
+INDEX_URL = "https://docs.oracle.com/en/database/oracle/mongodb-api/mgapi/index.html"
+MONTH_YEAR_RE = re.compile(
+    r"\b("
+    r"January|February|March|April|May|June|July|August|September|October|November|December"
+    r")\s+\d{4}\b"
+)
+DOC_ID_RE = re.compile(r"\bF\d{5}-\d+\b")
 
 
 @dataclass
@@ -21,6 +30,7 @@ class AnalysisResult:
     detail_df: pd.DataFrame
     summary_df: pd.DataFrame
     output_dir: Path
+    doc_metadata: dict[str, str]
 
 
 def _clean_text(text: str) -> str:
@@ -31,6 +41,113 @@ def _clean_text(text: str) -> str:
         .replace("\ufeff", "")
     )
     return " ".join(cleaned.split()).strip()
+
+
+def _latest_output_dir(output_root: str = "outputs") -> Path | None:
+    root = Path(output_root)
+    if not root.exists():
+        return None
+    candidates = [p for p in root.glob("feature_support_*") if p.is_dir()]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+
+
+def _load_latest_metadata(output_root: str = "outputs") -> dict[str, str] | None:
+    latest_dir = _latest_output_dir(output_root)
+    if latest_dir is None:
+        return None
+
+    metadata_path = latest_dir / "document_metadata.json"
+    if not metadata_path.exists():
+        return None
+
+    try:
+        return json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+def _extract_document_metadata(html: str, source_url: str) -> dict[str, str]:
+    soup = BeautifulSoup(html, "html.parser")
+    lines = [
+        _clean_text(line)
+        for line in soup.get_text("\n", strip=True).splitlines()
+        if _clean_text(line)
+    ]
+    text = "\n".join(lines)
+
+    doc_id_match = DOC_ID_RE.search(text)
+    date_match = MONTH_YEAR_RE.search(text)
+    title = next((line for line in lines if "Database API for MongoDB" in line), "")
+
+    return {
+        "doc_source_url": source_url,
+        "doc_title": title,
+        "doc_id": doc_id_match.group(0) if doc_id_match else "",
+        "doc_version_date": date_match.group(0) if date_match else "",
+        "metadata_fetched_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def _compare_document_metadata(
+    current: dict[str, str],
+    previous: dict[str, str] | None,
+) -> dict[str, str]:
+    if previous is None:
+        return {
+            **current,
+            "previous_doc_id": "",
+            "previous_doc_version_date": "",
+            "update_status": "首次记录或无历史版本信息",
+        }
+
+    previous_doc_id = previous.get("doc_id", "")
+    previous_doc_version_date = previous.get("doc_version_date", "")
+    current_doc_id = current.get("doc_id", "")
+    current_doc_version_date = current.get("doc_version_date", "")
+
+    if not current_doc_id and not current_doc_version_date:
+        update_status = "无法判断: 未解析到当前文档版本信息"
+    elif current_doc_id != previous_doc_id or current_doc_version_date != previous_doc_version_date:
+        update_status = "发现文档版本变化，建议重新核对 Feature Support 明细"
+    else:
+        update_status = "未发现文档版本变化"
+
+    return {
+        **current,
+        "previous_doc_id": previous_doc_id,
+        "previous_doc_version_date": previous_doc_version_date,
+        "update_status": update_status,
+    }
+
+
+def fetch_document_metadata(
+    index_url: str = INDEX_URL,
+    output_root: str = "outputs",
+    timeout: int = 30,
+    max_retries: int = 3,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, str]:
+    if progress_callback:
+        progress_callback(f"[DOC] Fetch document metadata -> {index_url}")
+    html = fetch_html(
+        url=index_url,
+        timeout=timeout,
+        max_retries=max_retries,
+        progress_callback=progress_callback,
+    )
+    current = _extract_document_metadata(html, index_url)
+    previous = _load_latest_metadata(output_root)
+    metadata = _compare_document_metadata(current, previous)
+    if progress_callback:
+        progress_callback(
+            "[DOC] "
+            f"doc_id={metadata.get('doc_id', '')}, "
+            f"doc_version_date={metadata.get('doc_version_date', '')}, "
+            f"update_status={metadata.get('update_status', '')}"
+        )
+    return metadata
 
 
 def fetch_html(
@@ -210,12 +327,47 @@ def analyze_feature_support(
             f"[START] Analyze url={url}, timeout={timeout}s, max_retries={max_retries}"
         )
 
+    try:
+        doc_metadata = fetch_document_metadata(
+            output_root=output_root,
+            timeout=timeout,
+            max_retries=max_retries,
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:  # noqa: BLE001
+        doc_metadata = {
+            "doc_source_url": INDEX_URL,
+            "doc_title": "",
+            "doc_id": "",
+            "doc_version_date": "",
+            "metadata_fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "previous_doc_id": "",
+            "previous_doc_version_date": "",
+            "update_status": f"无法判断: 文档版本信息抓取失败 ({exc})",
+        }
+        if progress_callback:
+            progress_callback(f"[DOC] Metadata fetch failed: {exc}")
+
     html = fetch_html(
         url=url,
         timeout=timeout,
         max_retries=max_retries,
         progress_callback=progress_callback,
     )
+    if not doc_metadata.get("doc_id") and not doc_metadata.get("doc_version_date"):
+        fallback_metadata = _extract_document_metadata(html, url)
+        if fallback_metadata.get("doc_id") or fallback_metadata.get("doc_version_date"):
+            doc_metadata = _compare_document_metadata(
+                fallback_metadata,
+                _load_latest_metadata(output_root),
+            )
+            if progress_callback:
+                progress_callback(
+                    "[DOC] Fallback metadata from feature page: "
+                    f"doc_id={doc_metadata.get('doc_id', '')}, "
+                    f"doc_version_date={doc_metadata.get('doc_version_date', '')}, "
+                    f"update_status={doc_metadata.get('update_status', '')}"
+                )
     if progress_callback:
         progress_callback("[PARSE] Extracting feature support tables")
     tables = _extract_feature_support_tables(html)
@@ -307,17 +459,26 @@ def analyze_feature_support(
 
     detail_path = output_dir / "feature_support_detail.csv"
     summary_path = output_dir / "feature_support_summary.csv"
+    metadata_path = output_dir / "document_metadata.json"
 
     detail_df.to_csv(detail_path, index=False, encoding="utf-8-sig")
     summary.to_csv(summary_path, index=False, encoding="utf-8-sig")
+    metadata_path.write_text(
+        json.dumps(doc_metadata, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     if progress_callback:
         progress_callback(f"[SAVE] Detail -> {detail_path}")
         progress_callback(f"[SAVE] Summary -> {summary_path}")
+        progress_callback(f"[SAVE] Metadata -> {metadata_path}")
 
     report_path = output_dir / "report.md"
     with report_path.open("w", encoding="utf-8") as f:
         f.write("# Feature Support Analysis\n\n")
         f.write(f"- Source URL: {url}\n")
+        f.write(f"- Document version date: {doc_metadata.get('doc_version_date', '')}\n")
+        f.write(f"- Document ID: {doc_metadata.get('doc_id', '')}\n")
+        f.write(f"- Update status: {doc_metadata.get('update_status', '')}\n")
         f.write(f"- Total records: {len(detail_df)}\n")
         f.write("\n## Summary\n\n")
         f.write(summary.to_markdown(index=False))
@@ -326,4 +487,9 @@ def analyze_feature_support(
         progress_callback(f"[SAVE] Report -> {report_path}")
         progress_callback("[DONE] Analysis completed")
 
-    return AnalysisResult(detail_df=detail_df, summary_df=summary, output_dir=output_dir)
+    return AnalysisResult(
+        detail_df=detail_df,
+        summary_df=summary,
+        output_dir=output_dir,
+        doc_metadata=doc_metadata,
+    )
