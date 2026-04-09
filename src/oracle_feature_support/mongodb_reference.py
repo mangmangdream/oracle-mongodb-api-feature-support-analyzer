@@ -5,6 +5,7 @@ from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
+import re
 import time
 from typing import Callable
 from urllib.parse import urljoin
@@ -16,6 +17,7 @@ from bs4 import BeautifulSoup, Tag
 
 CATALOG_PATH = Path("outputs/mongodb_reference_catalog.csv")
 METADATA_PATH = Path("outputs/mongodb_reference_metadata.json")
+ABOUT_URL = "https://www.mongodb.com/docs/manual/about/"
 
 MONGODB_REFERENCE_SOURCES = [
     {
@@ -128,6 +130,7 @@ def _table_headers(table: Tag) -> list[str]:
 def _extract_rows_from_source(
     html: str,
     source: dict[str, str],
+    progress_callback: Callable[[str], None] | None = None,
 ) -> list[dict[str, str]]:
     soup = BeautifulSoup(html, "html.parser")
     rows: list[dict[str, str]] = []
@@ -174,6 +177,10 @@ def _extract_rows_from_source(
                 }
             )
 
+    if progress_callback:
+        progress_callback(
+            f"[REF] Extracted {len(rows)} entries from {source['label']}"
+        )
     return rows
 
 
@@ -186,11 +193,36 @@ def _load_existing_catalog() -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _extract_manual_version(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    text = " ".join(soup.get_text(" ", strip=True).split())
+    match = re.search(
+        r"reflects version\s+(\d+\.\d+)\s+of MongoDB",
+        text,
+        re.IGNORECASE,
+    )
+    return match.group(1) if match else ""
+
+
 def sync_mongodb_reference_catalog(
     timeout: int = 30,
     max_retries: int = 3,
     progress_callback: Callable[[str], None] | None = None,
 ) -> ReferenceSyncResult:
+    if progress_callback:
+        progress_callback(f"[REF] Fetch manual version -> {ABOUT_URL}")
+    about_html = _fetch_html(
+        ABOUT_URL,
+        timeout=timeout,
+        max_retries=max_retries,
+        progress_callback=progress_callback,
+    )
+    manual_version = _extract_manual_version(about_html)
+    if progress_callback:
+        progress_callback(
+            f"[REF] MongoDB manual version={manual_version or 'unknown'}"
+        )
+
     all_rows: list[dict[str, str]] = []
     for source in MONGODB_REFERENCE_SOURCES:
         if progress_callback:
@@ -201,7 +233,7 @@ def sync_mongodb_reference_catalog(
             max_retries=max_retries,
             progress_callback=progress_callback,
         )
-        all_rows.extend(_extract_rows_from_source(html, source))
+        all_rows.extend(_extract_rows_from_source(html, source, progress_callback))
 
     if not all_rows:
         raise ValueError("No MongoDB reference entries were extracted from official docs.")
@@ -253,6 +285,8 @@ def sync_mongodb_reference_catalog(
         "new_entry_count": int(new_count),
         "updated_entry_count": int(updated_count),
         "source_count": int(len(MONGODB_REFERENCE_SOURCES)),
+        "mongodb_manual_version": manual_version,
+        "mongodb_manual_about_url": ABOUT_URL,
     }
     METADATA_PATH.write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2),
@@ -260,6 +294,8 @@ def sync_mongodb_reference_catalog(
     )
 
     if progress_callback:
+        progress_callback(f"[REF] Catalog -> {CATALOG_PATH}")
+        progress_callback(f"[REF] Metadata -> {METADATA_PATH}")
         progress_callback(
             "[REF] Sync complete: "
             f"entries={len(reference_df)}, new={new_count}, updated={updated_count}"
