@@ -11,6 +11,8 @@ import streamlit as st
 
 from src.oracle_feature_support.fetcher import INDEX_URL, TARGET_URL, analyze_feature_support
 from src.oracle_feature_support.mongodb_reference import (
+    ABOUT_URL,
+    MONGODB_REFERENCE_SOURCES,
     enrich_feature_support_detail,
     load_mongodb_reference_catalog,
     load_mongodb_reference_metadata,
@@ -44,19 +46,93 @@ st.markdown(
         color: #d9f2ee;
         margin: 0;
     }
+    div[data-testid="stExpander"] {
+        border: 1px solid #dde5e7;
+        border-radius: 10px;
+        background: #fbfcfc;
+    }
+    div[data-testid="stExpander"] details summary p {
+        font-weight: 700;
+    }
+    .config-sidecard {
+        border: 1px solid #d7e4e2;
+        border-radius: 10px;
+        background: linear-gradient(180deg, #f7fbfb 0%, #f2f7f7 100%);
+        padding: 0.9rem 1rem;
+        min-height: 100%;
+    }
+    .config-sidecard h4 {
+        margin: 0 0 0.5rem 0;
+        font-size: 1rem;
+        color: #0f3b45;
+    }
+    .config-sidecard p {
+        margin: 0 0 0.45rem 0;
+        color: #4c6268;
+        line-height: 1.5;
+        font-size: 0.93rem;
+    }
+    .config-sidecard p:last-child {
+        margin-bottom: 0;
+    }
+    .icon-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.15rem 0 0.25rem 0;
+    }
+    .icon-toolbar-title {
+        font-weight: 700;
+        color: #1f2937;
+    }
+    .icon-toolbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
     div[data-testid="stMetric"] {
         background: #f6f8fa;
         border: 1px solid #e5e7eb;
         border-radius: 8px;
         padding: 0.85rem 1rem;
     }
+    .stButton > button,
+    .stFormSubmitButton > button {
+        min-height: 2.6rem;
+        border-radius: 10px;
+        border: 1px solid #cfe0de;
+        background: #f5f9f9;
+        color: #0f3b45;
+        font-weight: 700;
+        white-space: nowrap;
+        transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+    }
+    .stButton > button:hover,
+    .stFormSubmitButton > button:hover {
+        background: linear-gradient(135deg, #176b72 0%, #2f8f83 100%);
+        border-color: #176b72;
+        color: #ffffff;
+        box-shadow: 0 8px 18px rgba(23, 107, 114, 0.18);
+    }
+    .stButton > button[kind="primary"],
+    .stFormSubmitButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #0f3b45 0%, #176b72 100%);
+        color: #ffffff;
+        border-color: #0f3b45;
+    }
+    .stButton > button[kind="primary"]:hover,
+    .stFormSubmitButton > button[kind="primary"]:hover {
+        background: linear-gradient(135deg, #0b3139 0%, #135961 100%);
+        color: #ffffff;
+    }
     div[data-testid="stDataFrame"] {
         border-radius: 8px;
     }
     </style>
     <div class="app-hero">
-        <h1>Oracle MongoDB API - Feature Support</h1>
-        <p>手工触发抓取，跟踪 Oracle 文档版本，汇总 MongoDB API 支持情况。</p>
+        <h1>Oracle MongoDB API Feature Support 分析台</h1>
+        <p>手工触发同步，跟踪 Oracle 与 MongoDB 文档版本，分析 MongoDB API 支持情况。</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -82,6 +158,8 @@ if "restored_from_disk" not in st.session_state:
     st.session_state.restored_from_disk = False
 if "settings_loaded" not in st.session_state:
     st.session_state.settings_loaded = False
+if "detail_expanded_sections" not in st.session_state:
+    st.session_state.detail_expanded_sections = {}
 
 
 def _save_ui_settings() -> None:
@@ -90,6 +168,9 @@ def _save_ui_settings() -> None:
         json.dumps(
             {
                 "url": st.session_state.ui_saved_url,
+                "mongodb_url": st.session_state.ui_saved_mongodb_url,
+                "doc_link_urls": st.session_state.ui_doc_link_urls,
+                "default_doc_link_urls": st.session_state.ui_default_doc_link_urls,
                 "timeout": int(st.session_state.ui_timeout),
                 "max_retries": int(st.session_state.ui_max_retries),
                 "show_debug_log": bool(st.session_state.ui_show_debug),
@@ -108,9 +189,32 @@ if not st.session_state.settings_loaded:
             saved_settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             saved_settings = {}
-    saved_url = saved_settings.get("url", TARGET_URL)
-    st.session_state.ui_saved_url = saved_url
-    st.session_state.ui_url_draft = saved_url
+    default_doc_link_urls = {
+        "oracle_feature_support": TARGET_URL,
+        "oracle_version_source": INDEX_URL,
+        "manual_version": ABOUT_URL,
+        **{source["source_group"]: source["url"] for source in MONGODB_REFERENCE_SOURCES},
+    }
+    saved_default_doc_link_urls = saved_settings.get("default_doc_link_urls", {})
+    if isinstance(saved_default_doc_link_urls, dict):
+        for key, value in saved_default_doc_link_urls.items():
+            if key in default_doc_link_urls and str(value).strip():
+                default_doc_link_urls[key] = str(value).strip()
+    saved_doc_link_urls = saved_settings.get("doc_link_urls", {})
+    doc_link_urls = default_doc_link_urls.copy()
+    if isinstance(saved_doc_link_urls, dict):
+        for key, value in saved_doc_link_urls.items():
+            if key in doc_link_urls and str(value).strip():
+                doc_link_urls[key] = str(value).strip()
+    else:
+        saved_url = str(saved_settings.get("url", TARGET_URL)).strip()
+        saved_mongodb_url = str(saved_settings.get("mongodb_url", ABOUT_URL)).strip()
+        doc_link_urls["oracle_feature_support"] = saved_url or TARGET_URL
+        doc_link_urls["manual_version"] = saved_mongodb_url or ABOUT_URL
+    st.session_state.ui_default_doc_link_urls = default_doc_link_urls
+    st.session_state.ui_doc_link_urls = doc_link_urls
+    st.session_state.ui_saved_url = doc_link_urls["oracle_feature_support"]
+    st.session_state.ui_saved_mongodb_url = doc_link_urls["manual_version"]
     st.session_state.ui_timeout = int(saved_settings.get("timeout", 60))
     st.session_state.ui_max_retries = int(saved_settings.get("max_retries", 3))
     st.session_state.ui_show_debug = bool(saved_settings.get("show_debug_log", True))
@@ -121,39 +225,214 @@ if st.session_state.reference_df.empty:
 if not st.session_state.reference_metadata:
     st.session_state.reference_metadata = load_mongodb_reference_metadata()
 
-with st.container(border=True):
-    st.markdown("#### 目标链接")
-    with st.form("url_form", clear_on_submit=False):
-        url_draft = st.text_input("当前 Oracle 文档链接", value=st.session_state.ui_url_draft)
-        st.caption("URL 修改后需要先保存；开始抓取并分析和同步 MongoDB 官方说明只会使用已保存的 URL。")
-        url_action_cols = st.columns([0.45, 0.45, 0.45, 4.65])
-        with url_action_cols[0]:
-            save_url = st.form_submit_button("✓", help="保存当前 URL", use_container_width=True)
-        with url_action_cols[1]:
-            cancel_url = st.form_submit_button("×", help="取消未保存的修改", use_container_width=True)
-        with url_action_cols[2]:
-            restore_default_url = st.form_submit_button("↺", help="恢复默认 URL", use_container_width=True)
-        with url_action_cols[3]:
-            st.caption(f"已保存 URL: {st.session_state.ui_saved_url}")
 
-if save_url:
-    st.session_state.ui_saved_url = url_draft.strip() or TARGET_URL
-    st.session_state.ui_url_draft = st.session_state.ui_saved_url
-    _save_ui_settings()
-    st.rerun()
-elif cancel_url:
-    st.session_state.ui_url_draft = st.session_state.ui_saved_url
-    st.rerun()
-elif restore_default_url:
-    st.session_state.ui_saved_url = TARGET_URL
-    st.session_state.ui_url_draft = TARGET_URL
-    _save_ui_settings()
-    st.rerun()
+def _mongodb_source_pages(metadata: dict[str, object]) -> list[dict[str, object]]:
+    source_pages = metadata.get("source_pages")
+    if isinstance(source_pages, list) and source_pages:
+        return [
+            page for page in source_pages
+            if isinstance(page, dict) and str(page.get("url", "")).strip()
+        ]
+
+    fallback_pages: list[dict[str, object]] = []
+    about_url = str(metadata.get("mongodb_manual_about_url", "")).strip()
+    if about_url:
+        fallback_pages.append(
+            {
+                "label": "MongoDB About",
+                "url": about_url,
+                "entry_count": 1 if str(metadata.get("mongodb_manual_version", "")).strip() else 0,
+                "kind": "manual_version",
+            }
+        )
+    for source in MONGODB_REFERENCE_SOURCES:
+        fallback_pages.append(
+            {
+                "label": source["label"],
+                "url": source["url"],
+                "entry_count": "",
+                "kind": source["source_group"],
+            }
+        )
+    return fallback_pages
+
+
+def _document_link_definitions() -> list[dict[str, str]]:
+    definitions = [
+        {
+            "id": "oracle_feature_support",
+            "label": "Oracle Feature Support 文档",
+            "description": "用于同步 Oracle Feature Support 明细",
+            "default_url": TARGET_URL,
+        },
+        {
+            "id": "oracle_version_source",
+            "label": "Oracle 文档版本页",
+            "description": "用于确认 Oracle 文档版本信息",
+            "default_url": INDEX_URL,
+        },
+        {
+            "id": "manual_version",
+            "label": "MongoDB 文档版本页",
+            "description": "用于确认 MongoDB 文档版本号",
+            "default_url": ABOUT_URL,
+        },
+    ]
+    for source in MONGODB_REFERENCE_SOURCES:
+        definitions.append(
+            {
+                "id": source["source_group"],
+                "label": source["label"],
+                "description": f"用于同步 MongoDB {source['label']} 说明",
+                "default_url": source["url"],
+            }
+        )
+    return definitions
+
+
+def _document_link_rows(
+    metadata: dict[str, object],
+    doc_link_urls: dict[str, str],
+    oracle_entry_count: int | None = None,
+) -> list[dict[str, object]]:
+    source_page_map = {
+        str(page.get("kind", "")): page
+        for page in _mongodb_source_pages(metadata)
+        if isinstance(page, dict)
+    }
+    rows: list[dict[str, object]] = []
+    for definition in _document_link_definitions():
+        page = source_page_map.get(definition["id"], {})
+        entry_count = page.get("entry_count", "")
+        if definition["id"] == "oracle_feature_support" and oracle_entry_count is not None:
+            entry_count = oracle_entry_count
+        rows.append(
+            {
+                "id": definition["id"],
+                "文档项": definition["label"],
+                "链接": doc_link_urls.get(definition["id"], definition["default_url"]),
+                "上次抓取数": entry_count,
+                "用途说明": definition["description"],
+            }
+        )
+    return rows
+
+
+def _displayable_mongodb_source_pages(
+    metadata: dict[str, object],
+    current_mongodb_url: str,
+) -> list[dict[str, object]]:
+    current_url = current_mongodb_url.strip()
+    return [
+        page
+        for page in _mongodb_source_pages(metadata)
+        if str(page.get("url", "")).strip()
+        and str(page.get("url", "")).strip() != current_url
+    ]
+
+
+def _dataframe_height(row_count: int, min_height: int = 72, max_height: int = 320) -> int:
+    header_height = 38
+    row_height = 35
+    padding = 14
+    computed = header_height + max(row_count, 1) * row_height + padding
+    return max(min_height, min(computed, max_height))
+
+
+def _latest_oracle_entry_count(output_root: str = "outputs") -> int | None:
+    root = Path(output_root)
+    if not root.exists():
+        return None
+    candidates = [path for path in root.glob("feature_support_*") if path.is_dir()]
+    if not candidates:
+        return None
+    latest_dir = sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)[0]
+    detail_path = latest_dir / "feature_support_detail.csv"
+    if not detail_path.exists():
+        return None
+    try:
+        with detail_path.open("r", encoding="utf-8-sig") as handle:
+            row_count = sum(1 for _ in handle) - 1
+        return max(row_count, 0)
+    except Exception:  # noqa: BLE001
+        return None
+
 
 with st.container(border=True):
-    st.markdown("#### 抓取设置")
+    st.markdown("#### 同步配置")
+    st.markdown("##### 数据源配置")
+    st.caption("文档链接与来源中的链接修改后会自动保存并立即生效。")
+    if "doc_links_expanded" not in st.session_state:
+        st.session_state.doc_links_expanded = False
+    header_cols = st.columns([7.3, 0.55, 0.55, 0.55], gap="small")
+    with header_cols[0]:
+        st.markdown('<div class="icon-toolbar-title" style="padding-top:0.35rem;">文档链接与来源</div>', unsafe_allow_html=True)
+    with header_cols[1]:
+        save_url = st.button("★", key="save_doc_links_default", help="将当前链接保存为默认 URL", use_container_width=True)
+    with header_cols[2]:
+        restore_default_url = st.button("↺", key="restore_doc_links_default", help="恢复默认 URL", use_container_width=True)
+    with header_cols[3]:
+        toggle_doc_links = st.button(
+            "▾" if st.session_state.doc_links_expanded else "▸",
+            key="toggle_doc_links",
+            help="展开或折叠文档链接与来源",
+            use_container_width=True,
+        )
+    if toggle_doc_links:
+        st.session_state.doc_links_expanded = not st.session_state.doc_links_expanded
+        st.rerun()
+    if st.session_state.doc_links_expanded:
+        source_rows = _document_link_rows(
+            st.session_state.reference_metadata or {},
+            st.session_state.ui_doc_link_urls,
+            oracle_entry_count=(
+                len(st.session_state.result_detail_df)
+                if st.session_state.result_detail_df is not None
+                else _latest_oracle_entry_count()
+            ),
+        )
+        if source_rows:
+            source_df = pd.DataFrame(source_rows)
+            source_df["上次抓取数"] = source_df["上次抓取数"].map(
+                lambda value: str(int(value)) if str(value).strip() not in {"", "None"} else "-"
+            )
+            edited_source_df = st.data_editor(
+                source_df[["文档项", "链接", "上次抓取数", "用途说明"]],
+                key="doc_link_editor",
+                use_container_width=True,
+                hide_index=True,
+                height=_dataframe_height(len(source_df), max_height=300),
+                disabled=["文档项", "上次抓取数", "用途说明"],
+                column_config={
+                    "文档项": st.column_config.TextColumn(width="medium"),
+                    "链接": st.column_config.TextColumn(width="large"),
+                    "上次抓取数": st.column_config.TextColumn(width="small"),
+                    "用途说明": st.column_config.TextColumn(width="medium"),
+                },
+            )
+        else:
+            edited_source_df = None
+            st.caption("暂无文档链接。")
+        st.markdown(
+            """
+            <div class="config-sidecard">
+              <h4>配置说明</h4>
+              <p>编辑链接列后会自动保存并立即生效。</p>
+              <p>Oracle 链接用于同步 Feature Support 内容。</p>
+              <p>MongoDB 文档版本页用于版本确认与说明同步。</p>
+              <p>“✓” 会将当前链接保存为默认值；“↺” 会恢复默认值。</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.caption("Oracle 与 MongoDB 链接已统一合并到“文档链接与来源”中展示。")
+    else:
+        edited_source_df = None
+
+    st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
+    st.markdown("##### 同步执行")
     with st.form("run_form", clear_on_submit=False):
-        form_cols = st.columns([1, 1, 1.2, 1])
+        form_cols = st.columns([1, 1, 1.2], gap="large")
         with form_cols[0]:
             timeout = st.number_input(
                 "请求超时（秒）", min_value=10, max_value=180, step=5, key="ui_timeout"
@@ -164,32 +443,61 @@ with st.container(border=True):
             )
         with form_cols[2]:
             show_debug_log = st.checkbox("显示执行日志（排查问题）", key="ui_show_debug")
-        with form_cols[3]:
-            st.write("")
-            st.write("")
-        action_cols = st.columns([1.2, 1.2, 3.6])
+        st.markdown("<div style='height:0.4rem'></div>", unsafe_allow_html=True)
+        action_cols = st.columns([1.45, 1.45, 2.6], gap="medium")
         with action_cols[0]:
             sync_reference = st.form_submit_button("同步 MongoDB 官方说明", use_container_width=True)
         with action_cols[1]:
-            submitted = st.form_submit_button("开始抓取并分析", type="primary", use_container_width=True)
+            submitted = st.form_submit_button("同步 Oracle 官方文档", type="primary", use_container_width=True)
         with action_cols[2]:
-            reference_meta = st.session_state.reference_metadata or {}
-            st.caption("开始抓取并分析会获取 Oracle 最新文档中对 MongoDB API 的支持情况，并结合本地已缓存的 MongoDB 官方说明进行展示。")
-            if reference_meta:
-                st.caption(
-                    "说明缓存: "
-                    f"{reference_meta.get('entry_count', 0)} 条, "
-                    f"上次同步 {reference_meta.get('synced_at', '未知')}"
-                )
-            else:
-                st.caption("说明缓存: 尚未同步")
-            st.caption(
-                "说明更新仅在点击“同步 MongoDB 官方说明”时触发；"
-                "开始抓取并分析只会使用本地缓存，不会自动更新。"
-            )
-            st.caption(
-                "勾选“显示执行日志（排查问题）”后，同步 MongoDB 官方说明的抓取和缓存写入过程也会输出日志。"
-            )
+            st.markdown("")
+        st.markdown("<div style='height:0.35rem'></div>", unsafe_allow_html=True)
+        reference_meta = st.session_state.reference_metadata or {}
+        cache_summary = (
+            f"{reference_meta.get('entry_count', 0)} 条，上次同步 {reference_meta.get('synced_at', '未知')}"
+            if reference_meta
+            else "尚未同步"
+        )
+        st.markdown(
+            f"""
+            <div class="config-sidecard">
+              <h4>同步说明</h4>
+              <p>同步 Oracle 官方文档会更新 Oracle 最新 Feature Support，并结合本地 MongoDB 官方说明展示结果。</p>
+              <p>说明缓存：{cache_summary}</p>
+              <p>MongoDB 官方说明仅在点击“同步 MongoDB 官方说明”时更新；同步 Oracle 官方文档不会自动更新说明缓存。</p>
+              <p>勾选执行日志后，MongoDB 官方说明同步过程也会输出详细日志。</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+if edited_source_df is not None:
+    updated_doc_link_urls = st.session_state.ui_doc_link_urls.copy()
+    changed = False
+    for definition, (_, row) in zip(_document_link_definitions(), edited_source_df.iterrows()):
+        new_value = str(row["链接"]).strip() or definition["default_url"]
+        if updated_doc_link_urls.get(definition["id"]) != new_value:
+            updated_doc_link_urls[definition["id"]] = new_value
+            changed = True
+    if changed:
+        st.session_state.ui_doc_link_urls = updated_doc_link_urls
+        st.session_state.ui_saved_url = updated_doc_link_urls["oracle_feature_support"]
+        st.session_state.ui_saved_mongodb_url = updated_doc_link_urls["manual_version"]
+        _save_ui_settings()
+
+if save_url:
+    st.session_state.ui_default_doc_link_urls = st.session_state.ui_doc_link_urls.copy()
+    _save_ui_settings()
+    st.rerun()
+elif restore_default_url:
+    st.session_state.ui_doc_link_urls = {
+        key: value for key, value in st.session_state.ui_default_doc_link_urls.items()
+    }
+    st.session_state.ui_saved_url = st.session_state.ui_doc_link_urls["oracle_feature_support"]
+    st.session_state.ui_saved_mongodb_url = st.session_state.ui_doc_link_urls["manual_version"]
+    st.session_state.pop("doc_link_editor", None)
+    _save_ui_settings()
+    st.rerun()
 
 log_container = st.empty()
 
@@ -204,14 +512,142 @@ def _drop_empty_columns(df):
     return filtered[keep_cols]
 
 
-def _reorder_detail_columns(df):
+def _drop_empty_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    filtered = df.copy()
+    non_empty_mask = filtered.fillna("").astype(str).apply(
+        lambda row: row.str.strip().ne("").any(),
+        axis=1,
+    )
+    return filtered[non_empty_mask].copy()
+
+
+def _section_inline_bar_html(width_percent: float, color: str) -> str:
+    width = max(min(width_percent, 100.0), 2.0)
+    return f"""
+    <div style="width:100%; padding-top:0.15rem;">
+      <div style="width:100%; height:12px; border-radius:999px; background:#e7eef0; overflow:hidden;">
+        <div style="width:{width:.2f}%; height:100%; border-radius:999px; background:{color};"></div>
+      </div>
+    </div>
+    """
+
+
+def _status_segments_from_df(df: pd.DataFrame) -> list[tuple[str, int, str]]:
+    color_map = {
+        "Supported": "#2e8b57",
+        "Not Supported": "#d9534f",
+        "Partially Supported": "#f0ad4e",
+        "Other": "#6c757d",
+    }
+    if "normalized_status" not in df.columns or df.empty:
+        return [("Other", 0, color_map["Other"])]
+
+    counts = (
+        df["normalized_status"]
+        .fillna("Other")
+        .astype(str)
+        .replace("", "Other")
+        .value_counts()
+    )
+    ordered_statuses = ["Supported", "Not Supported", "Partially Supported", "Other"]
+    segments: list[tuple[str, int, str]] = []
+    for status in ordered_statuses:
+        count = int(counts.get(status, 0))
+        if count:
+            segments.append((status, count, color_map[status]))
+    extra_count = int(
+        counts[[status for status in counts.index if status not in ordered_statuses]].sum()
+    ) if not counts.empty else 0
+    if extra_count:
+        segments.append(("Other", extra_count, color_map["Other"]))
+    return segments or [("Other", 0, color_map["Other"])]
+
+
+def _section_status_bar_html(df: pd.DataFrame) -> str:
+    total = max(len(df), 1)
+    segments = _status_segments_from_df(df)
+    parts: list[str] = []
+    for status, count, color in segments:
+        width = max((count / total) * 100, 2.0) if count else 0
+        if not count:
+            continue
+        parts.append(
+            f"<span title='{html_lib.escape(status)}: {count}' "
+            f"style='display:block;height:100%;width:{width:.2f}%;background:{color};'></span>"
+        )
+    return (
+        "<div style='width:100%; padding-top:0.15rem;'>"
+        "<div style='display:flex;width:100%;height:12px;border-radius:999px;background:#e7eef0;overflow:hidden;'>"
+        + "".join(parts)
+        + "</div></div>"
+    )
+
+
+def _pick_existing_columns(cols: list[str], candidates: list[str]) -> list[str]:
+    picked: list[str] = []
+    for candidate in candidates:
+        for col in cols:
+            if col == candidate and col not in picked:
+                picked.append(col)
+    return picked
+
+
+def _reorder_detail_columns(df: pd.DataFrame, section_name: str | None = None) -> pd.DataFrame:
     cols = list(df.columns)
-    first_cols = []
-    for col in ["Command", "Operator", "Stage", "Support (Since)", "mongo_short_description", "mongo_doc_url"]:
-        if col in cols:
-            first_cols.append(col)
-    remaining = [c for c in cols if c not in first_cols]
-    return df[first_cols + remaining]
+    section_text = (section_name or "").strip().lower()
+
+    section_specific_front: list[str] = []
+    if "data types" in section_text:
+        section_specific_front = [
+            "Data Types",
+            "Data Type",
+            "Data Type and Alias",
+            "BSON Type",
+            "Alias",
+        ]
+    elif "index options" in section_text:
+        section_specific_front = [
+            "Index Option",
+            "Index option",
+        ]
+    elif "index" in section_text:
+        section_specific_front = [
+            "Index Type",
+            "Index type",
+        ]
+
+    generic_front = [
+        "Command",
+        "Operator",
+        "Stage",
+        "Feature",
+        "Data Type and Alias",
+        "Data Type",
+        "Index Type",
+        "Index Option",
+        "Field",
+        "Fields",
+        "Expression",
+        "Accumulator",
+        "Option",
+        "Options",
+        "Type",
+        "Name",
+        "Support (Since)",
+    ]
+    generic_tail = [
+        "功能说明",
+        "MongoDB 官方文档",
+        "Notes",
+        "Note",
+    ]
+
+    first_cols = _pick_existing_columns(cols, section_specific_front + generic_front)
+    tail_cols = _pick_existing_columns(cols, generic_tail)
+    remaining = [col for col in cols if col not in first_cols and col not in tail_cols]
+    return df[first_cols + remaining + tail_cols]
 
 
 def _filter_detail_df(
@@ -274,7 +710,41 @@ def _format_report_table(df: pd.DataFrame, link_columns: set[str] | None = None)
     return formatted.to_html(index=False, escape=False, classes="report-table")
 
 
-def _prepare_detail_display_df(df: pd.DataFrame, include_section: bool = False) -> pd.DataFrame:
+def _mongodb_source_pages_html(metadata: dict[str, object]) -> str:
+    pages = _displayable_mongodb_source_pages(
+        metadata,
+        str(metadata.get("mongodb_manual_about_url", "")),
+    )
+    if not pages:
+        return "<p class='empty-state'>除当前 MongoDB 版本页外，暂无其他 MongoDB 文档源链接。</p>"
+
+    items: list[str] = []
+    for page in pages:
+        label = html_lib.escape(str(page.get("label", "")))
+        url = html_lib.escape(str(page.get("url", "")))
+        entry_count = page.get("entry_count", "")
+        count_text = ""
+        if str(entry_count).strip() != "":
+            count_text = f"<span class='source-pill'>{html_lib.escape(str(entry_count))} 条</span>"
+        items.append(
+            f"""
+            <div class="source-link-item">
+              <div class="source-link-header">
+                <span class="source-link-label">{label}</span>
+                {count_text}
+              </div>
+              <div class="source-link-url"><a href="{url}" target="_blank" rel="noreferrer">{url}</a></div>
+            </div>
+            """
+        )
+    return "<div class='source-link-list'>" + "".join(items) + "</div>"
+
+
+def _prepare_detail_display_df(
+    df: pd.DataFrame,
+    include_section: bool = False,
+    section_name: str | None = None,
+) -> pd.DataFrame:
     prepared = df.copy()
     if not include_section:
         prepared = prepared.drop(columns=["section"], errors="ignore")
@@ -285,8 +755,9 @@ def _prepare_detail_display_df(df: pd.DataFrame, include_section: bool = False) 
     prepared = prepared.drop(columns=["mongo_name"], errors="ignore")
     prepared = prepared.drop(columns=["mongo_reference_category"], errors="ignore")
     prepared = prepared.drop(columns=["mongo_last_synced_at"], errors="ignore")
+    prepared = _drop_empty_rows(prepared)
     prepared = _drop_empty_columns(prepared)
-    prepared = _reorder_detail_columns(prepared)
+    prepared = _reorder_detail_columns(prepared, section_name=section_name)
     prepared = prepared.rename(
         columns={
             "mongo_short_description": "功能说明",
@@ -439,7 +910,7 @@ def _build_offline_report_html(
       margin-bottom: 6px;
       font-weight: 600;
     }}
-    .text-input, .multi-select {{
+    .text-input {{
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -449,7 +920,64 @@ def _build_offline_report_html(
       font-size: 14px;
     }}
     .multi-select {{
-      min-height: 160px;
+      position: relative;
+    }}
+    .multi-select-button {{
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      color: var(--text);
+      padding: 10px 12px;
+      font-size: 14px;
+      text-align: left;
+      cursor: pointer;
+    }}
+    .multi-select-button::after {{
+      content: "▾";
+      float: right;
+      color: var(--muted);
+    }}
+    .multi-select.open .multi-select-button::after {{
+      content: "▴";
+    }}
+    .multi-select-menu {{
+      display: none;
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(100% + 6px);
+      z-index: 20;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      max-height: 260px;
+      overflow: auto;
+      padding: 8px;
+    }}
+    .multi-select.open .multi-select-menu {{
+      display: block;
+    }}
+    .multi-select-option {{
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 6px;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+    }}
+    .multi-select-option:hover {{
+      background: #eef5f5;
+    }}
+    .multi-select-option input {{
+      margin-top: 2px;
+    }}
+    .multi-select-empty {{
+      color: var(--muted);
+      font-size: 13px;
+      padding: 8px 6px;
     }}
     .checkbox-row {{
       display: flex;
@@ -476,12 +1004,6 @@ def _build_offline_report_html(
     }}
     .btn:hover {{
       border-color: var(--brand-2);
-    }}
-    .metric-grid {{
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
-      margin-bottom: 18px;
     }}
     .chart-block {{
       border: 1px solid var(--line);
@@ -557,9 +1079,9 @@ def _build_offline_report_html(
       list-style: none;
       padding: 14px 16px;
       font-weight: 700;
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(220px, 320px) minmax(180px, 1fr) 86px;
       align-items: center;
-      justify-content: space-between;
       gap: 12px;
     }}
     .section-group summary::-webkit-details-marker {{
@@ -569,6 +1091,20 @@ def _build_offline_report_html(
       color: var(--muted);
       font-weight: 600;
       font-size: 13px;
+      text-align: right;
+    }}
+    .section-summary-bar {{
+      display: block;
+      width: 100%;
+      height: 12px;
+      border-radius: 999px;
+      background: #e7eef0;
+      overflow: hidden;
+    }}
+    .section-summary-bar-fill {{
+      display: block;
+      height: 100%;
+      min-width: 2px;
     }}
     .section-body {{
       padding: 0 16px 16px 16px;
@@ -586,6 +1122,57 @@ def _build_offline_report_html(
       display: grid;
       gap: 6px;
     }}
+    .source-links-wrap {{
+      margin-top: 12px;
+    }}
+    .source-links-wrap details {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      padding: 10px 12px;
+    }}
+    .source-links-wrap summary {{
+      cursor: pointer;
+      color: var(--text);
+      font-weight: 600;
+    }}
+    .source-link-list {{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }}
+    .source-link-item {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px 12px;
+    }}
+    .source-link-header {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+    }}
+    .source-link-label {{
+      font-size: 13px;
+      font-weight: 700;
+    }}
+    .source-link-url {{
+      font-size: 12px;
+      line-height: 1.45;
+      word-break: break-all;
+    }}
+    .source-pill {{
+      display: inline-block;
+      font-size: 11px;
+      color: var(--muted);
+      background: #edf4f4;
+      border-radius: 999px;
+      padding: 2px 8px;
+      white-space: nowrap;
+    }}
     a {{
       color: var(--brand-2);
       text-decoration: none;
@@ -594,14 +1181,14 @@ def _build_offline_report_html(
       text-decoration: underline;
     }}
     @media (max-width: 960px) {{
-      .meta-grid, .panel-grid, .metric-grid, .filter-grid {{
+      .meta-grid, .panel-grid, .filter-grid {{
         grid-template-columns: 1fr;
       }}
-      .bar-row {{
+      .bar-row, .section-group summary, .source-link-list {{
         grid-template-columns: 1fr;
       }}
-      .multi-select {{
-        min-height: 120px;
+      .section-count {{
+        text-align: left;
       }}
     }}
   </style>
@@ -615,7 +1202,6 @@ def _build_offline_report_html(
     </div>
 
     <div class="meta-grid">
-      <div class="meta-card"><div class="label">结果目录</div><div class="value">{html_lib.escape(output_dir)}</div></div>
       <div class="meta-card"><div class="label">Oracle 文档版本时间</div><div class="value">{html_lib.escape(doc_metadata.get('doc_version_date', '') or '未解析到')}</div></div>
       <div class="meta-card"><div class="label">Oracle 文档编号</div><div class="value">{html_lib.escape(doc_metadata.get('doc_id', '') or '未解析到')}</div></div>
       <div class="meta-card"><div class="label">MongoDB 手册版本</div><div class="value">{html_lib.escape(str(reference_metadata.get('mongodb_manual_version', '')) or '未同步')}</div></div>
@@ -629,6 +1215,12 @@ def _build_offline_report_html(
         <div class="note">Oracle 版本判断: {html_lib.escape(doc_metadata.get('update_status', ''))}</div>
         <div class="note">MongoDB 说明同步时间: {html_lib.escape(str(reference_metadata.get('synced_at', '未知')))}</div>
       </div>
+      <div class="source-links-wrap">
+        <details>
+          <summary>MongoDB 文档源链接</summary>
+          {_mongodb_source_pages_html(reference_metadata)}
+        </details>
+      </div>
     </div>
 
     <div class="panel-grid">
@@ -638,32 +1230,26 @@ def _build_offline_report_html(
         <div id="status-table" class="table-wrap"></div>
       </section>
       <section class="panel">
-        <h2>Oracle 启始支持的版本</h2>
+      <h2>Oracle 起始支持版本</h2>
         <div id="support-chart" class="chart-block"></div>
         <div id="support-table" class="table-wrap"></div>
       </section>
     </div>
 
     <section class="panel">
-      <h2>MongoDB 命令类型分布</h2>
-      <div id="section-chart" class="chart-block"></div>
-      <div id="section-table" class="table-wrap"></div>
-    </section>
-
-    <section class="panel">
-      <h2>Feature Support 明细</h2>
+      <h2>Feature Support 明细分析</h2>
       <div class="filter-grid">
         <div class="filter-control">
           <label for="keyword-filter">关键字搜索</label>
           <input id="keyword-filter" class="text-input" type="text" placeholder="搜索 Command / Operator / Stage / 功能说明" />
         </div>
         <div class="filter-control">
-          <label for="section-filter">按 section 筛选</label>
-          <select id="section-filter" class="multi-select" multiple></select>
+          <label>按 section 筛选</label>
+          <div id="section-filter" class="multi-select"></div>
         </div>
         <div class="filter-control">
-          <label for="support-filter">按 Support (Since) 筛选</label>
-          <select id="support-filter" class="multi-select" multiple></select>
+          <label>按 Support (Since) 筛选</label>
+          <div id="support-filter" class="multi-select"></div>
         </div>
         <div class="filter-control">
           <div class="checkbox-row">
@@ -676,11 +1262,6 @@ def _build_offline_report_html(
         <button id="clear-filters" class="btn" type="button">清空筛选</button>
         <button id="expand-all" class="btn" type="button">展开全部 section</button>
         <button id="collapse-all" class="btn" type="button">折叠全部 section</button>
-      </div>
-      <div class="metric-grid">
-        <div class="meta-card"><div class="label">当前命中条数</div><div id="metric-rows" class="value">0</div></div>
-        <div class="meta-card"><div class="label">当前 section 数</div><div id="metric-sections" class="value">0</div></div>
-        <div class="meta-card"><div class="label">当前说明覆盖</div><div id="metric-description" class="value">0</div></div>
       </div>
       <div id="detail-sections"></div>
     </section>
@@ -700,9 +1281,9 @@ def _build_offline_report_html(
     const sectionFilter = document.getElementById("section-filter");
     const supportFilter = document.getElementById("support-filter");
     const descOnlyFilter = document.getElementById("desc-only-filter");
-    const clearFiltersButton = document.getElementById("clear-filters");
-    const expandAllButton = document.getElementById("expand-all");
-    const collapseAllButton = document.getElementById("collapse-all");
+      const clearFiltersButton = document.getElementById("clear-filters");
+      const expandAllButton = document.getElementById("expand-all");
+      const collapseAllButton = document.getElementById("collapse-all");
 
     function escapeHtml(value) {{
       return String(value ?? "")
@@ -723,8 +1304,58 @@ def _build_offline_report_html(
         .sort((left, right) => String(left).localeCompare(String(right), "zh-CN"));
     }}
 
-    function selectedValues(selectElement) {{
-      return Array.from(selectElement.selectedOptions).map((option) => option.value);
+    function selectedValues(container) {{
+      return Array.from(container.querySelectorAll("input[type='checkbox']:checked")).map((input) => input.value);
+    }}
+
+    function reorderDetailColumns(columns, sectionName) {{
+      const sectionText = String(sectionName || "").trim().toLowerCase();
+      let sectionSpecificFront = [];
+      if (sectionText.includes("data types")) {{
+        sectionSpecificFront = ["Data Types", "Data Type", "Data Type and Alias", "BSON Type", "Alias"];
+      }} else if (sectionText.includes("index options")) {{
+        sectionSpecificFront = ["Index Option", "Index option"];
+      }} else if (sectionText.includes("index")) {{
+        sectionSpecificFront = ["Index Type", "Index type"];
+      }}
+
+      const genericFront = [
+        "Command",
+        "Operator",
+        "Stage",
+        "Feature",
+        "Data Type and Alias",
+        "Data Type",
+        "Index Type",
+        "Index Option",
+        "Field",
+        "Fields",
+        "Expression",
+        "Accumulator",
+        "Option",
+        "Options",
+        "Type",
+        "Name",
+        "Support (Since)",
+      ];
+      const genericTail = ["功能说明", "MongoDB 官方文档", "Notes", "Note"];
+
+      const pickExisting = (candidates) => {{
+        const picked = [];
+        candidates.forEach((candidate) => {{
+          columns.forEach((column) => {{
+            if (column === candidate && !picked.includes(column)) {{
+              picked.push(column);
+            }}
+          }});
+        }});
+        return picked;
+      }};
+
+      const front = pickExisting(sectionSpecificFront.concat(genericFront));
+      const tail = pickExisting(genericTail);
+      const middle = columns.filter((column) => !front.includes(column) && !tail.includes(column));
+      return front.concat(middle, tail);
     }}
 
     function percentage(count, total) {{
@@ -768,6 +1399,39 @@ def _build_offline_report_html(
       return `<table class="report-table">${{thead}}<tbody>${{tbody}}</tbody></table>`;
     }}
 
+    function sectionStatusSegments(rows) {{
+      const counts = {{
+        "Supported": 0,
+        "Not Supported": 0,
+        "Partially Supported": 0,
+        "Other": 0,
+      }};
+      rows.forEach((row) => {{
+        const status = String(row.__status || "").trim() || "Other";
+        if (Object.prototype.hasOwnProperty.call(counts, status)) {{
+          counts[status] += 1;
+        }} else {{
+          counts.Other += 1;
+        }}
+      }});
+      return [
+        ["Supported", counts.Supported, statusColorMap.Supported],
+        ["Not Supported", counts["Not Supported"], statusColorMap["Not Supported"]],
+        ["Partially Supported", counts["Partially Supported"], statusColorMap["Partially Supported"]],
+        ["Other", counts.Other, statusColorMap.Other],
+      ].filter((item) => item[1] > 0);
+    }}
+
+    function sectionStatusBar(rows) {{
+      const total = Math.max(rows.length, 1);
+      const segments = sectionStatusSegments(rows);
+      const html = segments.map(([label, count, color]) => {{
+        const width = Math.max((count / total) * 100, 2);
+        return `<span class="section-summary-bar-fill" title="${{escapeHtml(label)}}: ${{count}}" style="width:${{width}}%;background:${{color}};"></span>`;
+      }}).join("");
+      return `<span class="section-summary-bar">${{html}}</span>`;
+    }}
+
     function renderBars(targetId, title, items, colorResolver) {{
       const target = document.getElementById(targetId);
       if (!items.length) {{
@@ -789,12 +1453,56 @@ def _build_offline_report_html(
       target.innerHTML = `<h3>${{escapeHtml(title)}}</h3><div class="bars">${{rowsHtml}}</div>`;
     }}
 
-    function populateSelect(selectElement, values) {{
-      selectElement.innerHTML = values.map((value) => (
-        `<option value="${{escapeHtml(value)}}">${{escapeHtml(value)}}</option>`
-      )).join("");
-      const size = Math.min(Math.max(values.length, 4), 10);
-      selectElement.size = size;
+    function updateMultiSelectButton(container) {{
+      const selected = selectedValues(container);
+      const button = container.querySelector(".multi-select-button");
+      const placeholder = container.dataset.placeholder || "请选择";
+      if (!selected.length) {{
+        button.textContent = placeholder;
+        return;
+      }}
+      if (selected.length === 1) {{
+        button.textContent = selected[0];
+        return;
+      }}
+      button.textContent = `已选择 ${{selected.length}} 项`;
+    }}
+
+    function populateSelect(container, values, placeholder) {{
+      const menuContent = values.length
+        ? values.map((value, index) => `
+            <label class="multi-select-option" for="${{container.id}}-option-${{index}}">
+              <input id="${{container.id}}-option-${{index}}" type="checkbox" value="${{escapeHtml(value)}}" />
+              <span>${{escapeHtml(value)}}</span>
+            </label>
+          `).join("")
+        : `<div class="multi-select-empty">暂无可选项</div>`;
+
+      container.dataset.placeholder = placeholder;
+      container.innerHTML = `
+        <button type="button" class="multi-select-button">${{escapeHtml(placeholder)}}</button>
+        <div class="multi-select-menu">${{menuContent}}</div>
+      `;
+
+      const button = container.querySelector(".multi-select-button");
+      button.addEventListener("click", (event) => {{
+        event.stopPropagation();
+        document.querySelectorAll(".multi-select.open").forEach((element) => {{
+          if (element !== container) {{
+            element.classList.remove("open");
+          }}
+        }});
+        container.classList.toggle("open");
+      }});
+
+      container.querySelectorAll("input[type='checkbox']").forEach((input) => {{
+        input.addEventListener("change", () => {{
+          updateMultiSelectButton(container);
+          applyFilters();
+        }});
+      }});
+
+      updateMultiSelectButton(container);
     }}
 
     function buildFilterText(row) {{
@@ -826,17 +1534,8 @@ def _build_offline_report_html(
         return true;
       }});
 
-      renderMetrics(filteredRows);
       renderSummaries(filteredRows);
       renderDetails(filteredRows);
-    }}
-
-    function renderMetrics(rows) {{
-      const sectionCount = new Set(rows.map((row) => row.__section || "Unknown Section")).size;
-      const descriptionCount = rows.filter((row) => String(row["功能说明"] || "").trim()).length;
-      document.getElementById("metric-rows").textContent = String(rows.length);
-      document.getElementById("metric-sections").textContent = String(sectionCount);
-      document.getElementById("metric-description").textContent = String(descriptionCount);
     }}
 
     function renderSummaries(rows) {{
@@ -852,17 +1551,10 @@ def _build_offline_report_html(
       );
       renderBars(
         "support-chart",
-        "Oracle 启始支持的版本",
+        "Oracle 起始支持版本",
         supportRows,
         (_, index) => palette[index % palette.length]
       );
-      renderBars(
-        "section-chart",
-        "MongoDB 命令类型分布",
-        sectionRows,
-        (_, index) => palette[index % palette.length]
-      );
-
       document.getElementById("status-table").innerHTML = createTable(
         ["normalized_status", "count", "percentage"],
         statusRows.map((item) => ({{
@@ -875,14 +1567,6 @@ def _build_offline_report_html(
         ["support_since", "count", "percentage"],
         supportRows.map((item) => ({{
           support_since: item.label,
-          count: item.count,
-          percentage: `${{item.percentage}}%`,
-        }}))
-      );
-      document.getElementById("section-table").innerHTML = createTable(
-        ["section", "count", "percentage"],
-        sectionRows.map((item) => ({{
-          section: item.label,
           count: item.count,
           percentage: `${{item.percentage}}%`,
         }}))
@@ -906,9 +1590,13 @@ def _build_offline_report_html(
       }});
 
       const sectionsHtml = Array.from(grouped.entries()).map(([section, sectionRows]) => {{
+        const visibleColumns = reportData.detailColumns.filter((column) => (
+          sectionRows.some((row) => String(row[column] || "").trim() !== "")
+        ));
+        const orderedColumns = reorderDetailColumns(visibleColumns, section);
         const tableRows = sectionRows.map((row) => {{
           const record = {{}};
-          reportData.detailColumns.forEach((column) => {{
+          orderedColumns.forEach((column) => {{
             record[column] = row[column] || "";
           }});
           return record;
@@ -917,10 +1605,11 @@ def _build_offline_report_html(
           <details class="section-group">
             <summary>
               <span>${{escapeHtml(section)}}</span>
+              ${{sectionStatusBar(sectionRows)}}
               <span class="section-count">${{sectionRows.length}} 条</span>
             </summary>
             <div class="section-body table-wrap">
-              ${{createTable(reportData.detailColumns, tableRows, ["MongoDB 官方文档"])}}
+              ${{createTable(orderedColumns, tableRows, ["MongoDB 官方文档"])}}
             </div>
           </details>
         `;
@@ -937,27 +1626,35 @@ def _build_offline_report_html(
 
     function clearFilters() {{
       keywordFilter.value = "";
-      Array.from(sectionFilter.options).forEach((option) => {{
-        option.selected = false;
+      sectionFilter.querySelectorAll("input[type='checkbox']").forEach((input) => {{
+        input.checked = false;
       }});
-      Array.from(supportFilter.options).forEach((option) => {{
-        option.selected = false;
+      supportFilter.querySelectorAll("input[type='checkbox']").forEach((input) => {{
+        input.checked = false;
       }});
+      updateMultiSelectButton(sectionFilter);
+      updateMultiSelectButton(supportFilter);
       descOnlyFilter.checked = false;
       applyFilters();
     }}
 
     function init() {{
-      populateSelect(sectionFilter, uniqueSorted(reportData.detailRows.map((row) => row.__section || "Unknown Section")));
-      populateSelect(supportFilter, uniqueSorted(reportData.detailRows.map((row) => row.__support_since || "Unknown")));
+      populateSelect(sectionFilter, uniqueSorted(reportData.detailRows.map((row) => row.__section || "Unknown Section")), "选择 section");
+      populateSelect(supportFilter, uniqueSorted(reportData.detailRows.map((row) => row.__support_since || "Unknown")), "选择 Support (Since)");
 
       keywordFilter.addEventListener("input", applyFilters);
-      sectionFilter.addEventListener("change", applyFilters);
-      supportFilter.addEventListener("change", applyFilters);
       descOnlyFilter.addEventListener("change", applyFilters);
       clearFiltersButton.addEventListener("click", clearFilters);
       expandAllButton.addEventListener("click", () => expandOrCollapseAll(true));
       collapseAllButton.addEventListener("click", () => expandOrCollapseAll(false));
+      document.addEventListener("click", (event) => {{
+        if (!sectionFilter.contains(event.target)) {{
+          sectionFilter.classList.remove("open");
+        }}
+        if (!supportFilter.contains(event.target)) {{
+          supportFilter.classList.remove("open");
+        }}
+      }});
 
       applyFilters();
     }}
@@ -1034,6 +1731,12 @@ if sync_reference:
             sync_result = sync_mongodb_reference_catalog(
                 timeout=int(timeout),
                 max_retries=int(max_retries),
+                about_url=st.session_state.ui_saved_mongodb_url,
+                source_overrides={
+                    definition["id"]: st.session_state.ui_doc_link_urls.get(definition["id"], definition["default_url"])
+                    for definition in _document_link_definitions()
+                    if definition["id"] not in {"oracle_feature_support", "manual_version"}
+                },
                 progress_callback=emit_log,
             )
         except Exception as exc:  # noqa: BLE001
@@ -1056,10 +1759,11 @@ if submitted:
     st.session_state.result_output_dir = None
     st.session_state.doc_metadata = {}
 
-    with st.spinner("正在抓取并分析，请稍候..."):
+    with st.spinner("正在同步 Oracle 官方文档，请稍候..."):
         try:
             result = analyze_feature_support(
                 url=st.session_state.ui_saved_url,
+                index_url=st.session_state.ui_doc_link_urls.get("oracle_version_source", INDEX_URL),
                 timeout=int(timeout),
                 max_retries=int(max_retries),
                 progress_callback=emit_log,
@@ -1122,7 +1826,19 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
             section_display_df = section_df.rename(columns={"normalized_status": "section"})
             section_display_df = section_display_df[["section", "count", "percentage"]]
 
-    st.markdown("### 总览")
+    offline_report_html = _build_offline_report_html(
+        output_dir=output_dir,
+        doc_metadata=doc_metadata,
+        reference_metadata=reference_metadata,
+        status_summary_df=status_summary_df,
+        support_top_display_df=support_top_display_df,
+        section_display_df=section_display_df,
+        filtered_detail_df=enriched_detail_df,
+    )
+    offline_report_path = Path(output_dir) / "feature_support_report.html"
+    offline_report_path.write_text(offline_report_html, encoding="utf-8")
+
+    st.markdown("### 结果总览")
     overview_cols = st.columns([1.15, 1.15, 1.15, 1.05])
     with overview_cols[0]:
         st.metric("明细记录数", len(enriched_detail_df))
@@ -1142,10 +1858,9 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
         )
         st.info(f"上次刷新时间: {last_refresh_time}")
     else:
-        st.success(f"分析完成，结果已保存到: {output_dir}")
+        st.success(f"Oracle 官方文档同步完成，结果已保存到: {output_dir}")
 
     if doc_metadata:
-        st.caption(f"版本信息来源: {INDEX_URL}")
         update_status = doc_metadata.get("update_status", "")
         if "发现文档版本变化" in update_status:
             st.warning(update_status)
@@ -1161,13 +1876,36 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
             f"| 更新 {reference_metadata.get('updated_entry_count', 0)} "
             f"| 说明已覆盖 {description_match_count}"
         )
-        if reference_metadata.get("mongodb_manual_about_url"):
-            st.caption(
-                "MongoDB 版本来源: "
-                f"{reference_metadata.get('mongodb_manual_about_url')}"
-            )
 
-    st.markdown("### 统计分析")
+    download_cols = st.columns([1, 1, 1, 3])
+    with download_cols[0]:
+        st.download_button(
+            "下载明细 CSV",
+            data=enriched_detail_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="feature_support_detail.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    with download_cols[1]:
+        st.download_button(
+            "下载统计 CSV",
+            data=summary_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="feature_support_summary.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    with download_cols[2]:
+        st.download_button(
+            "下载 HTML 报告",
+            data=offline_report_html.encode("utf-8"),
+            file_name="feature_support_report.html",
+            mime="text/html",
+            use_container_width=True,
+        )
+    with download_cols[3]:
+        st.caption(f"离线 HTML 已保存到: {offline_report_path}")
+
+    st.markdown("### 支持情况分析")
     chart_cols = st.columns([1.05, 0.95])
 
     with chart_cols[0]:
@@ -1194,7 +1932,7 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
 
     with chart_cols[1]:
         with st.container(border=True):
-            st.subheader("Oracle 启始支持的版本")
+            st.subheader("Oracle 起始支持版本")
             if support_top_display_df.empty:
                 st.info("没有可展示的版本统计。")
             else:
@@ -1218,31 +1956,9 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
             if not support_top_display_df.empty:
                 st.dataframe(support_top_display_df, use_container_width=True, height=220)
 
-    if not section_display_df.empty:
-        with st.container(border=True):
-            st.subheader("MongoDB 命令类型分布")
-            section_chart_source = section_display_df.sort_values("count", ascending=False).copy()
-            section_chart_height = min(max(360, len(section_chart_source) * 22), 760)
-            section_chart = (
-                alt.Chart(section_chart_source)
-                .mark_bar(cornerRadiusEnd=3)
-                .encode(
-                    y=alt.Y("section:N", sort="-x", title="命令类型"),
-                    x=alt.X("count:Q", title="数量"),
-                    color=alt.Color(
-                        "count:Q",
-                        scale=alt.Scale(scheme="tealblues"),
-                        legend=None,
-                    ),
-                    tooltip=["section", "count", "percentage"],
-                )
-                .properties(height=section_chart_height)
-            )
-            st.altair_chart(section_chart, use_container_width=True)
-            st.dataframe(section_display_df, use_container_width=True, height=280)
-
     with st.container(border=True):
-        st.subheader("Feature Support 明细")
+        st.markdown('<div id="feature-support-detail"></div>', unsafe_allow_html=True)
+        st.subheader("Feature Support 明细分析")
 
         filter_cols = st.columns([1.4, 1.2, 1.2, 0.8])
         with filter_cols[0]:
@@ -1298,86 +2014,45 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
         offline_report_path = Path(output_dir) / "feature_support_report.html"
         offline_report_path.write_text(offline_report_html, encoding="utf-8")
 
-        filter_stats = st.columns(3)
-        with filter_stats[0]:
-            st.metric("当前命中条数", len(filtered_detail_df))
-        with filter_stats[1]:
-            matched_sections = (
-                filtered_detail_df["section"].dropna().astype(str).nunique()
-                if "section" in filtered_detail_df.columns
-                else 0
-            )
-            st.metric("当前 section 数", matched_sections)
-        with filter_stats[2]:
-            matched_descriptions = (
-                filtered_detail_df["mongo_short_description"].fillna("").astype(str).str.strip().ne("").sum()
-                if "mongo_short_description" in filtered_detail_df.columns
-                else 0
-            )
-            st.metric("当前说明覆盖", int(matched_descriptions))
-
         if "section" in filtered_detail_df.columns:
-            grouped = filtered_detail_df.groupby("section", dropna=False, sort=False)
+            grouped = list(filtered_detail_df.groupby("section", dropna=False, sort=False))
             for section_name, sec_df in grouped:
                 section_text = str(section_name) if str(section_name).strip() else "Unknown Section"
-                with st.expander(f"{section_text} ({len(sec_df)} 条)", expanded=False):
-                    sec_display_df = sec_df.drop(columns=["section"], errors="ignore")
-                    sec_display_df = sec_display_df.drop(columns=["table_index"], errors="ignore")
-                    sec_display_df = sec_display_df.drop(columns=["mongo_entity_type"], errors="ignore")
-                    sec_display_df = sec_display_df.drop(columns=["mongo_source_group"], errors="ignore")
-                    sec_display_df = sec_display_df.drop(columns=["mongo_name"], errors="ignore")
-                    sec_display_df = sec_display_df.drop(columns=["mongo_reference_category"], errors="ignore")
-                    sec_display_df = sec_display_df.drop(columns=["mongo_last_synced_at"], errors="ignore")
-                    sec_display_df = _drop_empty_columns(sec_display_df)
-                    sec_display_df = _reorder_detail_columns(sec_display_df)
-                    sec_display_df = sec_display_df.rename(
-                        columns={
-                            "mongo_short_description": "功能说明",
-                            "mongo_doc_url": "MongoDB 官方文档",
-                        }
+                expanded = bool(st.session_state.detail_expanded_sections.get(section_text, False))
+                with st.container(border=True):
+                    row_cols = st.columns([2.5, 4.7, 0.8])
+                    with row_cols[0]:
+                        st.markdown(f"**{section_text} ({len(sec_df)} 条)**")
+                    with row_cols[1]:
+                        st.markdown(
+                            _section_status_bar_html(sec_df),
+                            unsafe_allow_html=True,
+                        )
+                    with row_cols[2]:
+                        if st.button("▾" if expanded else "▸", key=f"toggle_section_{section_text}", use_container_width=True):
+                            st.session_state.detail_expanded_sections[section_text] = not expanded
+                            st.rerun()
+                    if not expanded:
+                        continue
+                    sec_display_df = _prepare_detail_display_df(
+                        sec_df,
+                        include_section=False,
+                        section_name=section_text,
                     )
-                    st.dataframe(sec_display_df, use_container_width=True, height=320)
+                    st.dataframe(
+                        sec_display_df,
+                        use_container_width=True,
+                        height=_dataframe_height(len(sec_display_df)),
+                        hide_index=True,
+                    )
         else:
-            detail_display_df = filtered_detail_df.drop(columns=["table_index"], errors="ignore")
-            detail_display_df = detail_display_df.drop(columns=["mongo_entity_type"], errors="ignore")
-            detail_display_df = detail_display_df.drop(columns=["mongo_source_group"], errors="ignore")
-            detail_display_df = detail_display_df.drop(columns=["mongo_name"], errors="ignore")
-            detail_display_df = detail_display_df.drop(columns=["mongo_reference_category"], errors="ignore")
-            detail_display_df = detail_display_df.drop(columns=["mongo_last_synced_at"], errors="ignore")
-            detail_display_df = _drop_empty_columns(detail_display_df)
-            detail_display_df = _reorder_detail_columns(detail_display_df)
-            detail_display_df = detail_display_df.rename(
-                columns={
-                    "mongo_short_description": "功能说明",
-                    "mongo_doc_url": "MongoDB 官方文档",
-                }
+            detail_display_df = _prepare_detail_display_df(
+                filtered_detail_df,
+                include_section=False,
             )
-            st.dataframe(detail_display_df, use_container_width=True, height=500)
-
-    download_cols = st.columns([1, 1, 1, 3])
-    with download_cols[0]:
-        st.download_button(
-            "下载明细 CSV",
-            data=enriched_detail_df.to_csv(index=False).encode("utf-8-sig"),
-            file_name="feature_support_detail.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-    with download_cols[1]:
-        st.download_button(
-            "下载统计 CSV",
-            data=summary_df.to_csv(index=False).encode("utf-8-sig"),
-            file_name="feature_support_summary.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-    with download_cols[2]:
-        st.download_button(
-            "下载 HTML 报告",
-            data=offline_report_html.encode("utf-8"),
-            file_name="feature_support_report.html",
-            mime="text/html",
-            use_container_width=True,
-        )
-    with download_cols[3]:
-        st.caption(f"离线 HTML 已保存到: {offline_report_path}")
+            st.dataframe(
+                detail_display_df,
+                use_container_width=True,
+                height=_dataframe_height(len(detail_display_df), max_height=520),
+                hide_index=True,
+            )

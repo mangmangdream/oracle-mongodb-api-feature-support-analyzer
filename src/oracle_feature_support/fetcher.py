@@ -317,6 +317,7 @@ def _normalize_status(raw: str) -> str:
 
 def analyze_feature_support(
     url: str = TARGET_URL,
+    index_url: str = INDEX_URL,
     output_root: str = "outputs",
     timeout: int = 30,
     max_retries: int = 3,
@@ -329,6 +330,7 @@ def analyze_feature_support(
 
     try:
         doc_metadata = fetch_document_metadata(
+            index_url=index_url,
             output_root=output_root,
             timeout=timeout,
             max_retries=max_retries,
@@ -336,7 +338,7 @@ def analyze_feature_support(
         )
     except Exception as exc:  # noqa: BLE001
         doc_metadata = {
-            "doc_source_url": INDEX_URL,
+            "doc_source_url": index_url,
             "doc_title": "",
             "doc_id": "",
             "doc_version_date": "",

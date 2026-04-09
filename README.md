@@ -2,7 +2,7 @@
 
 通过手工点击触发，抓取并分析 Oracle MongoDB API 文档中的 `Feature Support` 明细。
 
-目标链接（默认）：
+默认 Oracle 文档链接：
 
 - https://docs.oracle.com/en/database/oracle/mongodb-api/mgapi/support-mongodb-apis-operations-and-data-types-reference.html
 
@@ -49,14 +49,14 @@ streamlit run app.py
 
 浏览器打开后：
 
-1. 保持默认链接或替换目标链接
+1. 在“文档链接与来源”中确认或调整文档链接
 2. 如需更新 MongoDB 官方说明，手动点击 `同步 MongoDB 官方说明`
-3. 点击 `开始抓取并分析`
+3. 点击 `同步 Oracle 官方文档`
 4. 页面展示明细、汇总和补充说明，并自动保存结果到 `outputs/feature_support_时间戳/`
 
 注意：
 
-- `开始抓取并分析` 只会使用本地已缓存的 MongoDB 官方说明，不会自动联网更新说明内容
+- `同步 Oracle 官方文档` 只会使用本地已缓存的 MongoDB 官方说明，不会自动联网更新说明内容
 - 只有点击 `同步 MongoDB 官方说明` 才会从 MongoDB 在线文档抓取并更新说明缓存
 
 ## 输出文件

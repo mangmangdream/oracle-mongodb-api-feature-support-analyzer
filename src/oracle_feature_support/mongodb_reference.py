@@ -207,12 +207,14 @@ def _extract_manual_version(html: str) -> str:
 def sync_mongodb_reference_catalog(
     timeout: int = 30,
     max_retries: int = 3,
+    about_url: str = ABOUT_URL,
+    source_overrides: dict[str, str] | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> ReferenceSyncResult:
     if progress_callback:
-        progress_callback(f"[REF] Fetch manual version -> {ABOUT_URL}")
+        progress_callback(f"[REF] Fetch manual version -> {about_url}")
     about_html = _fetch_html(
-        ABOUT_URL,
+        about_url,
         timeout=timeout,
         max_retries=max_retries,
         progress_callback=progress_callback,
@@ -224,16 +226,35 @@ def sync_mongodb_reference_catalog(
         )
 
     all_rows: list[dict[str, str]] = []
+    source_pages: list[dict[str, str | int]] = [
+        {
+            "label": "MongoDB About",
+            "url": about_url,
+            "entry_count": 1 if manual_version else 0,
+            "kind": "manual_version",
+        }
+    ]
     for source in MONGODB_REFERENCE_SOURCES:
+        source_url = str((source_overrides or {}).get(source["source_group"], source["url"]))
+        source_with_url = {**source, "url": source_url}
         if progress_callback:
             progress_callback(f"[REF] Sync source -> {source['label']}")
         html = _fetch_html(
-            source["url"],
+            source_url,
             timeout=timeout,
             max_retries=max_retries,
             progress_callback=progress_callback,
         )
-        all_rows.extend(_extract_rows_from_source(html, source, progress_callback))
+        extracted_rows = _extract_rows_from_source(html, source_with_url, progress_callback)
+        all_rows.extend(extracted_rows)
+        source_pages.append(
+            {
+                "label": source["label"],
+                "url": source_url,
+                "entry_count": int(len(extracted_rows)),
+                "kind": str(source["source_group"]),
+            }
+        )
 
     if not all_rows:
         raise ValueError("No MongoDB reference entries were extracted from official docs.")
@@ -286,7 +307,8 @@ def sync_mongodb_reference_catalog(
         "updated_entry_count": int(updated_count),
         "source_count": int(len(MONGODB_REFERENCE_SOURCES)),
         "mongodb_manual_version": manual_version,
-        "mongodb_manual_about_url": ABOUT_URL,
+        "mongodb_manual_about_url": about_url,
+        "source_pages": source_pages,
     }
     METADATA_PATH.write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2),
