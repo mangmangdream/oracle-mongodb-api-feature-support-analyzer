@@ -783,6 +783,31 @@ def _build_offline_report_html(
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     detail_display_df = _prepare_detail_display_df(filtered_detail_df, include_section=True)
     detail_columns = [col for col in detail_display_df.columns if col != "section"]
+    oracle_doc_source_url = str(doc_metadata.get("doc_source_url", "") or INDEX_URL)
+    mongodb_manual_about_url = str(reference_metadata.get("mongodb_manual_about_url", "") or ABOUT_URL)
+    offline_doc_link_urls = {
+        definition["id"]: definition["default_url"] for definition in _document_link_definitions()
+    }
+    offline_doc_link_urls["oracle_feature_support"] = TARGET_URL
+    offline_doc_link_urls["oracle_version_source"] = oracle_doc_source_url
+    offline_doc_link_urls["manual_version"] = mongodb_manual_about_url
+    for page in _mongodb_source_pages(reference_metadata):
+        kind = str(page.get("kind", "")).strip()
+        url = str(page.get("url", "")).strip()
+        if kind and url:
+            offline_doc_link_urls[kind] = url
+    document_link_df = pd.DataFrame(
+        _document_link_rows(
+            reference_metadata,
+            offline_doc_link_urls,
+            oracle_entry_count=len(filtered_detail_df),
+        )
+    )
+    if not document_link_df.empty:
+        document_link_df["上次抓取数"] = document_link_df["上次抓取数"].map(
+            lambda value: str(int(value)) if str(value).strip() not in {"", "None"} else "-"
+        )
+        document_link_df = document_link_df[["文档项", "链接", "上次抓取数", "用途说明"]]
     detail_rows: list[dict[str, str]] = []
     for _, row in detail_display_df.fillna("").iterrows():
         record = {col: str(row.get(col, "") or "") for col in detail_columns}
@@ -794,15 +819,22 @@ def _build_offline_report_html(
     payload = {
         "generatedAt": generated_at,
         "outputDir": output_dir,
+        "detailCount": len(filtered_detail_df),
         "oracleDocVersionDate": doc_metadata.get("doc_version_date", "") or "未解析到",
         "oracleDocId": doc_metadata.get("doc_id", "") or "未解析到",
-        "oracleDocSourceUrl": doc_metadata.get("doc_source_url", ""),
+        "oracleDocSourceUrl": oracle_doc_source_url,
         "oracleUpdateStatus": doc_metadata.get("update_status", ""),
         "mongodbManualVersion": str(reference_metadata.get("mongodb_manual_version", "")) or "未同步",
-        "mongodbManualAboutUrl": str(reference_metadata.get("mongodb_manual_about_url", "")),
+        "mongodbManualAboutUrl": mongodb_manual_about_url,
         "mongodbSyncedAt": str(reference_metadata.get("synced_at", "未知")),
+        "mongodbNewEntryCount": int(reference_metadata.get("new_entry_count", 0) or 0),
+        "mongodbUpdatedEntryCount": int(reference_metadata.get("updated_entry_count", 0) or 0),
+        "mongodbDescriptionCoverage": int(
+            filtered_detail_df["mongo_short_description"].fillna("").astype(str).str.strip().ne("").sum()
+        ) if "mongo_short_description" in filtered_detail_df.columns else 0,
         "detailColumns": detail_columns,
         "detailRows": detail_rows,
+        "documentLinks": document_link_df.fillna("").astype(str).to_dict(orient="records"),
         "summaryTables": {
             "status": status_summary_df.fillna("").astype(str).to_dict(orient="records"),
             "support": support_top_display_df.fillna("").astype(str).to_dict(orient="records"),
@@ -1201,27 +1233,28 @@ def _build_offline_report_html(
       <div class="note">生成时间: {generated_at} | 单文件离线交互快照</div>
     </div>
 
-    <div class="meta-grid">
-      <div class="meta-card"><div class="label">Oracle 文档版本时间</div><div class="value">{html_lib.escape(doc_metadata.get('doc_version_date', '') or '未解析到')}</div></div>
-      <div class="meta-card"><div class="label">Oracle 文档编号</div><div class="value">{html_lib.escape(doc_metadata.get('doc_id', '') or '未解析到')}</div></div>
-      <div class="meta-card"><div class="label">MongoDB 手册版本</div><div class="value">{html_lib.escape(str(reference_metadata.get('mongodb_manual_version', '')) or '未同步')}</div></div>
-    </div>
-
-    <div class="panel">
-      <h2>版本来源</h2>
+    <section class="panel">
+      <h2>结果总览</h2>
+      <div class="meta-grid">
+        <div class="meta-card"><div class="label">明细记录数</div><div class="value">{len(filtered_detail_df)}</div></div>
+        <div class="meta-card"><div class="label">Oracle 文档版本时间</div><div class="value">{html_lib.escape(doc_metadata.get('doc_version_date', '') or '未解析到')}</div></div>
+        <div class="meta-card"><div class="label">Oracle 文档编号</div><div class="value">{html_lib.escape(doc_metadata.get('doc_id', '') or '未解析到')}</div></div>
+        <div class="meta-card"><div class="label">MongoDB 手册版本</div><div class="value">{html_lib.escape(str(reference_metadata.get('mongodb_manual_version', '')) or '未同步')}</div></div>
+      </div>
       <div class="version-lines">
-        <div class="note">Oracle 文档来源: {html_lib.escape(doc_metadata.get('doc_source_url', ''))}</div>
-        <div class="note">MongoDB 版本来源: {html_lib.escape(str(reference_metadata.get('mongodb_manual_about_url', '')))}</div>
+        <div class="note">导出时间: {generated_at}</div>
+        <div class="note">结果目录: {html_lib.escape(output_dir)}</div>
+        <div class="note">MongoDB 官方说明同步时间: {html_lib.escape(str(reference_metadata.get('synced_at', '未知')))} | 新增 {html_lib.escape(str(reference_metadata.get('new_entry_count', 0)))} | 更新 {html_lib.escape(str(reference_metadata.get('updated_entry_count', 0)))} | 说明已覆盖 {html_lib.escape(str(payload["mongodbDescriptionCoverage"]))}</div>
         <div class="note">Oracle 版本判断: {html_lib.escape(doc_metadata.get('update_status', ''))}</div>
-        <div class="note">MongoDB 说明同步时间: {html_lib.escape(str(reference_metadata.get('synced_at', '未知')))}</div>
       </div>
-      <div class="source-links-wrap">
-        <details>
-          <summary>MongoDB 文档源链接</summary>
-          {_mongodb_source_pages_html(reference_metadata)}
-        </details>
+    </section>
+
+    <section class="panel">
+      <h2>文档链接与来源</h2>
+      <div class="table-wrap">
+        {_format_report_table(document_link_df, link_columns={"链接"}) if not document_link_df.empty else "<p class='empty-state'>暂无文档链接。</p>"}
       </div>
-    </div>
+    </section>
 
     <div class="panel-grid">
       <section class="panel">
