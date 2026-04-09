@@ -14,6 +14,7 @@
 - 生成统计汇总（数量与占比）
 - 导出明细和统计 CSV，并生成 `report.md`
 - 从文档首页提取文档编号和版本时间，用于辅助判断是否有更新内容
+- 可手工同步 MongoDB 官方文档中的 `command`、`operator`、`stage` 说明，并补充到明细表
 - 可选显示执行日志（抓取重试、解析步骤、保存路径）用于排查问题
 
 ## 快速开始
@@ -49,8 +50,9 @@ streamlit run app.py
 浏览器打开后：
 
 1. 保持默认链接或替换目标链接
-2. 点击 `开始抓取并分析`
-3. 页面展示明细和汇总，并自动保存结果到 `outputs/feature_support_时间戳/`
+2. 如需补充 MongoDB 官方说明，先点击 `同步 MongoDB 官方说明`
+3. 点击 `开始抓取并分析`
+4. 页面展示明细、汇总和补充说明，并自动保存结果到 `outputs/feature_support_时间戳/`
 
 ## 输出文件
 
@@ -60,6 +62,11 @@ streamlit run app.py
 - `feature_support_summary.csv`
 - `document_metadata.json`
 - `report.md`
+
+MongoDB 官方说明缓存文件：
+
+- `outputs/mongodb_reference_catalog.csv`
+- `outputs/mongodb_reference_metadata.json`
 
 ## 代码结构
 

@@ -9,6 +9,12 @@ import pandas as pd
 import streamlit as st
 
 from src.oracle_feature_support.fetcher import INDEX_URL, TARGET_URL, analyze_feature_support
+from src.oracle_feature_support.mongodb_reference import (
+    enrich_feature_support_detail,
+    load_mongodb_reference_catalog,
+    load_mongodb_reference_metadata,
+    sync_mongodb_reference_catalog,
+)
 
 SETTINGS_PATH = Path("outputs/.ui_settings.json")
 
@@ -63,6 +69,10 @@ if "result_output_dir" not in st.session_state:
     st.session_state.result_output_dir = None
 if "doc_metadata" not in st.session_state:
     st.session_state.doc_metadata = {}
+if "reference_df" not in st.session_state:
+    st.session_state.reference_df = pd.DataFrame()
+if "reference_metadata" not in st.session_state:
+    st.session_state.reference_metadata = {}
 if "debug_logs" not in st.session_state:
     st.session_state.debug_logs = []
 if "restore_attempted" not in st.session_state:
@@ -85,6 +95,11 @@ if not st.session_state.settings_loaded:
     st.session_state.ui_show_debug = bool(saved_settings.get("show_debug_log", True))
     st.session_state.settings_loaded = True
 
+if st.session_state.reference_df.empty:
+    st.session_state.reference_df = load_mongodb_reference_catalog()
+if not st.session_state.reference_metadata:
+    st.session_state.reference_metadata = load_mongodb_reference_metadata()
+
 with st.container(border=True):
     st.markdown("#### 抓取设置")
     with st.form("run_form", clear_on_submit=False):
@@ -105,6 +120,20 @@ with st.container(border=True):
             st.write("")
             submitted = st.form_submit_button("开始抓取并分析", type="primary")
 
+sync_cols = st.columns([1.25, 4])
+with sync_cols[0]:
+    sync_reference = st.button("同步 MongoDB 官方说明", use_container_width=True)
+with sync_cols[1]:
+    reference_meta = st.session_state.reference_metadata or {}
+    if reference_meta:
+        st.caption(
+            "MongoDB 说明缓存: "
+            f"{reference_meta.get('entry_count', 0)} 条, "
+            f"上次同步 {reference_meta.get('synced_at', '未知')}"
+        )
+    else:
+        st.caption("MongoDB 说明缓存: 尚未同步")
+
 log_container = st.empty()
 
 
@@ -121,7 +150,7 @@ def _drop_empty_columns(df):
 def _reorder_detail_columns(df):
     cols = list(df.columns)
     first_cols = []
-    for col in ["Operator", "Support (Since)"]:
+    for col in ["Command", "Operator", "Stage", "Support (Since)", "mongo_short_description", "mongo_doc_url"]:
         if col in cols:
             first_cols.append(col)
     remaining = [c for c in cols if c not in first_cols]
@@ -181,6 +210,26 @@ def emit_log(message: str) -> None:
     if st.session_state.get("show_debug_log_runtime", True):
         log_container.code("\n".join(st.session_state.debug_logs[-200:]), language="text")
 
+if sync_reference:
+    st.session_state.debug_logs = []
+    st.session_state.show_debug_log_runtime = show_debug_log
+    with st.spinner("正在同步 MongoDB 官方说明，请稍候..."):
+        try:
+            sync_result = sync_mongodb_reference_catalog(
+                timeout=int(timeout),
+                max_retries=int(max_retries),
+                progress_callback=emit_log,
+            )
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"MongoDB 官方说明同步失败: {exc}")
+        else:
+            st.session_state.reference_df = sync_result.reference_df
+            st.session_state.reference_metadata = sync_result.metadata
+            st.success(
+                "MongoDB 官方说明同步完成，"
+                f"共 {sync_result.metadata.get('entry_count', 0)} 条。"
+            )
+
 if submitted:
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS_PATH.write_text(
@@ -229,7 +278,19 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
     summary_df = st.session_state.result_summary_df
     output_dir = st.session_state.result_output_dir
     doc_metadata = st.session_state.doc_metadata or {}
+    reference_df = st.session_state.reference_df
+    reference_metadata = st.session_state.reference_metadata or {}
     has_metric = "metric" in summary_df.columns
+    enriched_detail_df = (
+        enrich_feature_support_detail(detail_df, reference_df)
+        if not reference_df.empty
+        else detail_df.copy()
+    )
+    description_match_count = (
+        enriched_detail_df["mongo_short_description"].fillna("").astype(str).str.strip().ne("").sum()
+        if "mongo_short_description" in enriched_detail_df.columns
+        else 0
+    )
 
     status_summary_df_raw = (
         summary_df[summary_df["metric"] == "normalized_status"].copy()
@@ -256,13 +317,15 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
             section_display_df = section_display_df[["section", "count", "percentage"]]
 
     st.markdown("### 总览")
-    overview_cols = st.columns([1, 1, 1.4])
+    overview_cols = st.columns([1, 1, 1.2, 1.2])
     with overview_cols[0]:
-        st.metric("明细记录数", len(detail_df))
+        st.metric("明细记录数", len(enriched_detail_df))
     with overview_cols[1]:
         st.metric("文档版本时间", doc_metadata.get("doc_version_date", "") or "未解析到")
     with overview_cols[2]:
         st.metric("文档编号", doc_metadata.get("doc_id", "") or "未解析到")
+    with overview_cols[3]:
+        st.metric("说明已覆盖", description_match_count)
 
     if st.session_state.restored_from_disk:
         last_refresh_time = datetime.fromtimestamp(Path(output_dir).stat().st_mtime).strftime(
@@ -279,6 +342,14 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
             st.warning(update_status)
         elif update_status:
             st.info(update_status)
+
+    if reference_metadata:
+        st.caption(
+            "MongoDB 官方说明同步时间: "
+            f"{reference_metadata.get('synced_at', '未知')} "
+            f"| 新增 {reference_metadata.get('new_entry_count', 0)} "
+            f"| 更新 {reference_metadata.get('updated_entry_count', 0)}"
+        )
 
     st.markdown("### 统计分析")
     chart_cols = st.columns([1.05, 0.95])
@@ -356,27 +427,49 @@ if st.session_state.result_detail_df is not None and st.session_state.result_sum
 
     with st.container(border=True):
         st.subheader("Feature Support 明细")
-        if "section" in detail_df.columns:
-            grouped = detail_df.groupby("section", dropna=False, sort=False)
+        if "section" in enriched_detail_df.columns:
+            grouped = enriched_detail_df.groupby("section", dropna=False, sort=False)
             for section_name, sec_df in grouped:
                 section_text = str(section_name) if str(section_name).strip() else "Unknown Section"
                 with st.expander(f"{section_text} ({len(sec_df)} 条)", expanded=False):
                     sec_display_df = sec_df.drop(columns=["section"], errors="ignore")
                     sec_display_df = sec_display_df.drop(columns=["table_index"], errors="ignore")
+                    sec_display_df = sec_display_df.drop(columns=["mongo_entity_type"], errors="ignore")
+                    sec_display_df = sec_display_df.drop(columns=["mongo_source_group"], errors="ignore")
+                    sec_display_df = sec_display_df.drop(columns=["mongo_name"], errors="ignore")
+                    sec_display_df = sec_display_df.drop(columns=["mongo_reference_category"], errors="ignore")
+                    sec_display_df = sec_display_df.drop(columns=["mongo_last_synced_at"], errors="ignore")
                     sec_display_df = _drop_empty_columns(sec_display_df)
                     sec_display_df = _reorder_detail_columns(sec_display_df)
+                    sec_display_df = sec_display_df.rename(
+                        columns={
+                            "mongo_short_description": "功能说明",
+                            "mongo_doc_url": "MongoDB 官方文档",
+                        }
+                    )
                     st.dataframe(sec_display_df, use_container_width=True, height=320)
         else:
-            detail_display_df = detail_df.drop(columns=["table_index"], errors="ignore")
+            detail_display_df = enriched_detail_df.drop(columns=["table_index"], errors="ignore")
+            detail_display_df = detail_display_df.drop(columns=["mongo_entity_type"], errors="ignore")
+            detail_display_df = detail_display_df.drop(columns=["mongo_source_group"], errors="ignore")
+            detail_display_df = detail_display_df.drop(columns=["mongo_name"], errors="ignore")
+            detail_display_df = detail_display_df.drop(columns=["mongo_reference_category"], errors="ignore")
+            detail_display_df = detail_display_df.drop(columns=["mongo_last_synced_at"], errors="ignore")
             detail_display_df = _drop_empty_columns(detail_display_df)
             detail_display_df = _reorder_detail_columns(detail_display_df)
+            detail_display_df = detail_display_df.rename(
+                columns={
+                    "mongo_short_description": "功能说明",
+                    "mongo_doc_url": "MongoDB 官方文档",
+                }
+            )
             st.dataframe(detail_display_df, use_container_width=True, height=500)
 
     download_cols = st.columns([1, 1, 4])
     with download_cols[0]:
         st.download_button(
             "下载明细 CSV",
-            data=detail_df.to_csv(index=False).encode("utf-8-sig"),
+            data=enriched_detail_df.to_csv(index=False).encode("utf-8-sig"),
             file_name="feature_support_detail.csv",
             mime="text/csv",
             use_container_width=True,
