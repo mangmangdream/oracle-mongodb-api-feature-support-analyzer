@@ -25,6 +25,27 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## 如何启动应用
+
+如果已经安装过依赖，进入项目目录后直接启动：
+
+```bash
+cd /Users/qizou/aiworkspace/mongodbapi-feature-update
+streamlit run app.py
+```
+
+如果是第一次运行，先安装依赖再启动：
+
+```bash
+cd /Users/qizou/aiworkspace/mongodbapi-feature-update
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+启动成功后，浏览器会自动打开页面；如果没有自动打开，可以手动访问：
+
+- http://localhost:8501
+
 浏览器打开后：
 
 1. 保持默认链接或替换目标链接
