@@ -1,6 +1,31 @@
 {
   "url": "https://docs.oracle.com/en/database/oracle/mongodb-api/mgapi/support-mongodb-apis-operations-and-data-types-reference.html",
+  "mongodb_url": "https://www.mongodb.com/docs/manual/about/",
+  "doc_link_urls": {
+    "oracle_feature_support": "https://docs.oracle.com/en/database/oracle/mongodb-api/mgapi/support-mongodb-apis-operations-and-data-types-reference.html",
+    "oracle_version_source": "https://docs.oracle.com/en/database/oracle/mongodb-api/mgapi/index.html",
+    "manual_version": "https://www.mongodb.com/docs/manual/about/",
+    "command": "https://www.mongodb.com/docs/manual/reference/command/",
+    "aggregation_stage": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/",
+    "query_operator": "https://www.mongodb.com/docs/manual/reference/mql/query-predicates/",
+    "update_operator": "https://www.mongodb.com/docs/manual/reference/mql/update/",
+    "projection_operator": "https://www.mongodb.com/docs/manual/reference/operator/projection/",
+    "expression_operator": "https://www.mongodb.com/docs/manual/reference/mql/expressions/"
+  },
+  "default_doc_link_urls": {
+    "oracle_feature_support": "https://docs.oracle.com/en/database/oracle/mongodb-api/mgapi/support-mongodb-apis-operations-and-data-types-reference.html",
+    "oracle_version_source": "https://docs.oracle.com/en/database/oracle/mongodb-api/mgapi/index.html",
+    "manual_version": "https://www.mongodb.com/docs/manual/about/",
+    "command": "https://www.mongodb.com/docs/manual/reference/command/",
+    "aggregation_stage": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/",
+    "query_operator": "https://www.mongodb.com/docs/manual/reference/mql/query-predicates/",
+    "update_operator": "https://www.mongodb.com/docs/manual/reference/mql/update/",
+    "projection_operator": "https://www.mongodb.com/docs/manual/reference/operator/projection/",
+    "expression_operator": "https://www.mongodb.com/docs/manual/reference/mql/expressions/"
+  },
   "timeout": 60,
-  "max_retries": 3,
-  "show_debug_log": false
+  "max_retries": 1,
+  "show_debug_log": true,
+  "mongo_usage_uri": "mongodb://lab:oracle@127.0.0.1:27017/oracle_mongo_api_test?authSource=oracle_mongo_api_test",
+  "mongo_usage_database": ""
 }

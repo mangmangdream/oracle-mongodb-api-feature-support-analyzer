@@ -29,7 +29,7 @@ DOC_ID_RE = re.compile(r"\bF\d{5}-\d+\b")
 class AnalysisResult:
     detail_df: pd.DataFrame
     summary_df: pd.DataFrame
-    output_dir: Path
+    output_dir: Path | None
     doc_metadata: dict[str, str]
 
 
@@ -298,10 +298,12 @@ def _pick_status_column(columns: Iterable[str]) -> str | None:
 
 
 def _normalize_status(raw: str) -> str:
-    low = raw.lower()
-    if any(k in low for k in ["not supported", "unsupported", "no"]):
+    low = raw.lower().strip()
+    if "no-op" in low:
+        return "Supported"
+    if any(k in low for k in ["not supported", "unsupported"]):
         return "Not Supported"
-    if any(k in low for k in ["n/a", "na", "not applicable"]):
+    if low in {"no", "n/a", "na"} or "not applicable" in low:
         return "Not Supported"
     if any(k in low for k in ["partial", "limited", "partially"]):
         return "Partially Supported"
@@ -455,6 +457,24 @@ def analyze_feature_support(
     if progress_callback:
         progress_callback(f"[ANALYZE] Summary categories={len(summary)}")
 
+    if progress_callback:
+        progress_callback("[DONE] Analysis completed")
+
+    return AnalysisResult(
+        detail_df=detail_df,
+        summary_df=summary,
+        output_dir=None,
+        doc_metadata=doc_metadata,
+    )
+
+
+def write_feature_support_outputs(
+    detail_df: pd.DataFrame,
+    summary_df: pd.DataFrame,
+    doc_metadata: dict[str, str],
+    output_root: str = "outputs",
+    progress_callback: Callable[[str], None] | None = None,
+) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path(output_root) / f"feature_support_{timestamp}"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -464,9 +484,9 @@ def analyze_feature_support(
     metadata_path = output_dir / "document_metadata.json"
 
     detail_df.to_csv(detail_path, index=False, encoding="utf-8-sig")
-    summary.to_csv(summary_path, index=False, encoding="utf-8-sig")
+    summary_df.to_csv(summary_path, index=False, encoding="utf-8-sig")
     metadata_path.write_text(
-        json.dumps(doc_metadata, ensure_ascii=False, indent=2),
+        json.dumps(doc_metadata, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
     if progress_callback:
@@ -477,21 +497,14 @@ def analyze_feature_support(
     report_path = output_dir / "report.md"
     with report_path.open("w", encoding="utf-8") as f:
         f.write("# Feature Support Analysis\n\n")
-        f.write(f"- Source URL: {url}\n")
+        f.write(f"- Source URL: {doc_metadata.get('doc_source_url', '')}\n")
         f.write(f"- Document version date: {doc_metadata.get('doc_version_date', '')}\n")
         f.write(f"- Document ID: {doc_metadata.get('doc_id', '')}\n")
         f.write(f"- Update status: {doc_metadata.get('update_status', '')}\n")
         f.write(f"- Total records: {len(detail_df)}\n")
         f.write("\n## Summary\n\n")
-        f.write(summary.to_markdown(index=False))
+        f.write(summary_df.to_markdown(index=False))
         f.write("\n")
     if progress_callback:
         progress_callback(f"[SAVE] Report -> {report_path}")
-        progress_callback("[DONE] Analysis completed")
-
-    return AnalysisResult(
-        detail_df=detail_df,
-        summary_df=summary,
-        output_dir=output_dir,
-        doc_metadata=doc_metadata,
-    )
+    return output_dir

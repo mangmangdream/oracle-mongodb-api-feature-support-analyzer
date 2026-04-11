@@ -1,0 +1,16 @@
+﻿metric,label,count,usage_count,percentage
+oracle_support_status,Supported,66,95,100.0
+feature_type,command,13,29,30.53
+feature_type,expression,15,19,20.0
+feature_type,operator,22,24,25.26
+feature_type,stage,16,23,24.21
+command_name,aggregate,38,52,54.74
+command_name,count,1,1,1.05
+command_name,createIndexes,1,1,1.05
+command_name,delete,1,1,1.05
+command_name,distinct,1,1,1.05
+command_name,dropIndexes,1,1,1.05
+command_name,find,19,32,33.68
+command_name,insert,1,1,1.05
+command_name,listIndexes,1,1,1.05
+command_name,update,2,4,4.21

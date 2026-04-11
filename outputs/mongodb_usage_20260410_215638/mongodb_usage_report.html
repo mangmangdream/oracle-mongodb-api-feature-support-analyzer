@@ -1,0 +1,631 @@
+
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MongoDB Usage Analysis Report</title>
+  <style>
+    :root {
+      --bg: #f4f7f8;
+      --panel: #ffffff;
+      --panel-soft: #f8fbfb;
+      --line: #dde5e7;
+      --text: #15202b;
+      --muted: #57727a;
+      --brand-1: #0f3b45;
+      --brand-2: #176b72;
+      --brand-3: #2f8f83;
+      --ok: #2e8b57;
+      --warn: #f0ad4e;
+      --bad: #d9534f;
+      --other: #6c757d;
+      --shadow: 0 10px 28px rgba(12, 52, 59, 0.06);
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      background:
+        radial-gradient(circle at top left, rgba(47, 143, 131, 0.08), transparent 28%),
+        radial-gradient(circle at top right, rgba(15, 59, 69, 0.08), transparent 26%),
+        var(--bg);
+      color: var(--text);
+    }
+    .page { max-width: 1280px; margin: 0 auto; padding: 24px; }
+    .hero {
+      background: linear-gradient(135deg, #0f3b45 0%, #176b72 56%, #2f8f83 100%);
+      color: #fff;
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: var(--shadow);
+    }
+    .hero h1 { margin: 0 0 8px 0; font-size: 28px; }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .meta-card, .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: var(--shadow);
+    }
+    .meta-card .label { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+    .meta-card .value { font-size: 22px; font-weight: 700; }
+    .panel { margin-bottom: 18px; }
+    .panel h2 { margin: 0 0 12px 0; font-size: 20px; }
+    .panel-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .filter-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .filter-control label {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+    .text-input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      color: var(--text);
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+    .multi-select { position: relative; }
+    .multi-select-button {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      color: var(--text);
+      padding: 10px 12px;
+      font-size: 14px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .multi-select-button::after { content: "▾"; float: right; color: var(--muted); }
+    .multi-select.open .multi-select-button::after { content: "▴"; }
+    .multi-select-menu {
+      display: none;
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(100% + 6px);
+      z-index: 20;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      max-height: 260px;
+      overflow: auto;
+      padding: 8px;
+    }
+    .multi-select.open .multi-select-menu { display: block; }
+    .multi-select-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 6px;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .multi-select-option:hover { background: #eef5f5; }
+    .multi-select-option input { margin-top: 2px; }
+    .multi-select-empty { color: var(--muted); font-size: 13px; padding: 8px 6px; }
+    .chart-svg { width: 100%; height: auto; display: block; }
+    .chart-legend { display: grid; gap: 8px; margin-top: 12px; }
+    .chart-legend-item {
+      display: grid;
+      grid-template-columns: 12px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      font-size: 13px;
+      color: var(--text);
+    }
+    .chart-legend-swatch { width: 12px; height: 12px; border-radius: 999px; display: inline-block; }
+    .chart-legend-value { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .report-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .report-table th, .report-table td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+    .report-table th { background: #f1f5f6; }
+    .table-wrap { overflow-x: auto; }
+    .note { color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .empty-state { color: var(--muted); margin: 0; }
+    .code-block {
+      background: #0f1720;
+      color: #d7e3ea;
+      border-radius: 8px;
+      padding: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+    @media (max-width: 980px) {
+      .meta-grid, .panel-grid, .filter-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="hero">
+      <h1>MongoDB Usage Analysis</h1>
+      <div>离线 HTML 报告</div>
+      <div class="note">生成时间: 2026-04-10 21:58:52 | 单文件离线交互快照</div>
+    </div>
+
+    <section class="panel">
+      <h2>结果总览</h2>
+      <div class="meta-grid">
+        <div class="meta-card"><div class="label">Profile 样本数</div><div class="value" id="metric-profile-count">0</div></div>
+        <div class="meta-card"><div class="label">功能项数</div><div class="value" id="metric-feature-count">0</div></div>
+        <div class="meta-card"><div class="label">Supported</div><div class="value" id="metric-supported">0</div></div>
+        <div class="meta-card"><div class="label">Not Supported</div><div class="value" id="metric-not-supported">0</div></div>
+        <div class="meta-card"><div class="label">Unknown</div><div class="value" id="metric-unknown">0</div></div>
+      </div>
+      <div class="note">数据库: oracle_mongo_api_test | 抓取时间: 2026-04-10T21:56:37 | 开始时间: 未设置 | 结束时间: 未设置</div>
+      <div class="note">当前支持判断组合: Oracle 19c + op</div>
+      <div class="note">结果目录: outputs/mongodb_usage_20260410_215638</div>
+    </section>
+
+    <div class="panel-grid">
+      <section class="panel">
+        <h2>支持状态汇总</h2>
+        <div id="status-chart"></div>
+        <div id="status-table" class="table-wrap"></div>
+      </section>
+      <section class="panel">
+        <h2>命令使用汇总</h2>
+        <div id="command-chart"></div>
+        <div id="command-table" class="table-wrap"></div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h2>MongoDB Usage 对比结果</h2>
+      <div class="filter-grid">
+        <div class="filter-control">
+          <label for="oracle-version-filter">目标 Oracle 数据库版本</label>
+          <select id="oracle-version-filter" class="text-input"></select>
+        </div>
+        <div class="filter-control">
+          <label for="oracle-mode-filter">部署方式</label>
+          <select id="oracle-mode-filter" class="text-input">
+            <option value="任意部署方式">任意部署方式</option>
+            <option value="op">op</option>
+            <option value="no-op">no-op</option>
+          </select>
+        </div>
+        <div class="filter-control">
+          <label for="keyword-filter">关键字搜索</label>
+          <input id="keyword-filter" class="text-input" type="text" placeholder="搜索 feature / collection / op / Oracle 分类" />
+        </div>
+        <div class="filter-control">
+          <label>当前支持判断规则</label>
+          <div class="note">根据所选 Oracle 数据库版本和部署方式组合，动态重算当前离线报告中的 Supported / Not Supported。</div>
+        </div>
+      </div>
+      <div class="filter-grid">
+        <div class="filter-control"><label>按当前组合支持判断筛选</label><div id="status-filter" class="multi-select"></div></div>
+        <div class="filter-control"><label>按 Profile op 筛选</label><div id="op-filter" class="multi-select"></div></div>
+        <div class="filter-control"><label>按功能类型筛选</label><div id="feature-type-filter" class="multi-select"></div></div>
+        <div class="filter-control"><label>按命令筛选</label><div id="command-filter" class="multi-select"></div></div>
+      </div>
+      <div class="note" id="usage-context-note"></div>
+      <div id="usage-detail-table" class="table-wrap"></div>
+    </section>
+
+    <section class="panel">
+      <h2>重点关注项</h2>
+      <div id="risk-table" class="table-wrap"></div>
+    </section>
+
+    <section class="panel">
+      <h2>迁移关注证据样本（仅 Not Supported）</h2>
+      <div class="filter-control" style="max-width:640px;">
+        <label for="evidence-select">选择一项不支持的功能查看证据</label>
+        <select id="evidence-select" class="text-input"></select>
+      </div>
+      <div class="panel-grid" style="margin-top:16px;">
+        <section class="panel" style="margin-bottom:0;">
+          <h2 style="font-size:18px;">样本摘要</h2>
+          <div id="evidence-summary" class="note">当前筛选条件下没有 Not Supported 的证据样本。</div>
+        </section>
+        <section class="panel" style="margin-bottom:0;">
+          <h2 style="font-size:18px;">sample_value</h2>
+          <div id="evidence-sample-path" class="note"></div>
+          <div id="evidence-sample-value" class="code-block">暂无样本。</div>
+        </section>
+      </div>
+    </section>
+  </div>
+  <script>
+    const reportData = {"generatedAt": "2026-04-10 21:58:52", "outputDir": "outputs/mongodb_usage_20260410_215638", "metadata": {"database_name": "oracle_mongo_api_test", "fetched_at": "2026-04-10T21:56:37", "start_time": "", "end_time": "", "profile_count": 42, "truncated": false}, "oracleTargetVersion": "19c", "oracleTargetMode": "op", "initialFilters": {"statuses": [], "opTypes": [], "featureTypes": [], "commands": [], "keyword": ""}, "detailRows": [{"feature_type": "command", "feature_name": "find", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "system.profile", "usage_count": 26, "first_seen": "2026-04-10T04:41:01.684000+00:00", "last_seen": "2026-04-10T13:53:58.351000+00:00", "max_duration_ms": 0, "sample_path": "command.find", "sample_value": "\"system.profile\"", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Query and Write Operation", "oracle_feature": "find"}, {"feature_type": "stage", "feature_name": "$match", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 4, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.631000+00:00", "max_duration_ms": 12, "sample_path": "command.pipeline[0].$match", "sample_value": "{\"status\": {\"$ne\": \"CANCELLED\"}}", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "command", "feature_name": "aggregate", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 3, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.631000+00:00", "max_duration_ms": 12, "sample_path": "command.aggregate", "sample_value": "\"orders\"", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Aggregation Commands", "oracle_feature": "aggregate"}, {"feature_type": "command", "feature_name": "update", "command_name": "update", "op_type": "update", "database": "oracle_mongo_api_test", "collection": "order_metrics", "usage_count": 3, "first_seen": "2026-04-10T04:41:01.630000+00:00", "last_seen": "2026-04-10T04:41:01.631000+00:00", "max_duration_ms": 11, "sample_path": "command.update", "sample_value": "null", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Query and Write Operation", "oracle_feature": "update"}, {"feature_type": "stage", "feature_name": "$project", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 3, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.615000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[6].$project", "sample_value": "{\"amountBucket\": 1, \"createdAt\": 1, \"orderNo\": 1}", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "expression", "feature_name": "$avg", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 2, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.631000+00:00", "max_duration_ms": 12, "sample_path": "command.pipeline[1].$group.avgAmount.$avg", "sample_value": "\"$amount\"", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Accumulator Operators", "oracle_feature": "nan"}, {"feature_type": "expression", "feature_name": "$cond", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 2, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.615000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[1].$set.amountBucket.$cond", "sample_value": "[{\"$gte\": [\"$amount\", 200]}, \"high\", \"normal\"]", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Conditional Operators", "oracle_feature": "nan"}, {"feature_type": "expression", "feature_name": "$ifNull", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 2, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[1].$project.emailText.$ifNull", "sample_value": "[\"$note\", \"missing\"]", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Conditional Operators", "oracle_feature": "nan"}, {"feature_type": "expression", "feature_name": "$sum", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 2, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.631000+00:00", "max_duration_ms": 12, "sample_path": "command.pipeline[1].$group.totalAmount.$sum", "sample_value": "\"$amount\"", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Accumulator Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$eq", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 2, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.$or[0].discount.$eq", "sample_value": "16", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Comparison Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$ne", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 2, "first_seen": "2026-04-10T04:41:01.615000+00:00", "last_seen": "2026-04-10T04:41:01.631000+00:00", "max_duration_ms": 12, "sample_path": "command.pipeline[0].$match.status.$ne", "sample_value": "\"CANCELLED\"", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Comparison Query Operators", "oracle_feature": "nan"}, {"feature_type": "stage", "feature_name": "$group", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 2, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.631000+00:00", "max_duration_ms": 12, "sample_path": "command.pipeline[1].$group", "sample_value": "{\"_id\": \"$status\", \"avgAmount\": {\"$avg\": \"$amount\"}, \"totalAmount\": {\"$sum\": \"$amount\"}}", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "stage", "feature_name": "$sort", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 2, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.615000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[3].$sort", "sample_value": "{\"createdAt\": -1}", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "command", "feature_name": "aggregate", "command_name": "aggregate", "op_type": "insert", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.647000+00:00", "last_seen": "2026-04-10T04:41:01.647000+00:00", "max_duration_ms": 12, "sample_path": "command.aggregate", "sample_value": "\"orders\"", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Aggregation Commands", "oracle_feature": "aggregate"}, {"feature_type": "command", "feature_name": "count", "command_name": "count", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.659000+00:00", "last_seen": "2026-04-10T04:41:01.659000+00:00", "max_duration_ms": 0, "sample_path": "command.count", "sample_value": "\"orders\"", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Aggregation Commands", "oracle_feature": "count"}, {"feature_type": "command", "feature_name": "createIndexes", "command_name": "createIndexes", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.679000+00:00", "last_seen": "2026-04-10T04:41:01.679000+00:00", "max_duration_ms": 16, "sample_path": "command.createIndexes", "sample_value": "\"orders\"", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai. No-op (19c)", "oracle_category": "Database Commands", "oracle_feature": "createIndexes"}, {"feature_type": "command", "feature_name": "delete", "command_name": "delete", "op_type": "remove", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.654000+00:00", "last_seen": "2026-04-10T04:41:01.654000+00:00", "max_duration_ms": 0, "sample_path": "command.delete", "sample_value": "null", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Query and Write Operation", "oracle_feature": "delete"}, {"feature_type": "command", "feature_name": "distinct", "command_name": "distinct", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.657000+00:00", "last_seen": "2026-04-10T04:41:01.657000+00:00", "max_duration_ms": 0, "sample_path": "command.distinct", "sample_value": "\"orders\"", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Aggregation Commands", "oracle_feature": "distinct"}, {"feature_type": "command", "feature_name": "dropIndexes", "command_name": "dropIndexes", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.680000+00:00", "last_seen": "2026-04-10T04:41:01.680000+00:00", "max_duration_ms": 0, "sample_path": "command.dropIndexes", "sample_value": "\"orders\"", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai. No-op (19c)", "oracle_category": "Database Commands", "oracle_feature": "dropIndexes"}, {"feature_type": "command", "feature_name": "find", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.find", "sample_value": "\"orders\"", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Query and Write Operation", "oracle_feature": "find"}, {"feature_type": "command", "feature_name": "insert", "command_name": "insert", "op_type": "insert", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.594000+00:00", "last_seen": "2026-04-10T04:41:01.594000+00:00", "max_duration_ms": 1, "sample_path": "command.insert", "sample_value": "\"orders\"", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Query and Write Operation", "oracle_feature": "insert"}, {"feature_type": "command", "feature_name": "listIndexes", "command_name": "listIndexes", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.661000+00:00", "last_seen": "2026-04-10T04:41:01.661000+00:00", "max_duration_ms": 0, "sample_path": "command.listIndexes", "sample_value": "\"orders\"", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Database Commands", "oracle_feature": "listIndexes"}, {"feature_type": "command", "feature_name": "update", "command_name": "update", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.655000+00:00", "last_seen": "2026-04-10T04:41:01.655000+00:00", "max_duration_ms": 0, "sample_path": "command.update", "sample_value": "{\"$inc\": {\"amount\": 1}, \"$set\": {\"auditFlag\": true, \"auditedAt\": \"2026-04-10 04:41:01.654000+00:00\"}}", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Query and Write Operation", "oracle_feature": "update"}, {"feature_type": "expression", "feature_name": "$concat", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[1].$project.itemSkus.$map.in.$concat", "sample_value": "[\"$$item.sku\", \"-\", {\"$toString\": \"$$item.qty\"}]", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "String Operators", "oracle_feature": "nan"}, {"feature_type": "expression", "feature_name": "$dateToString", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[1].$project.orderDateText.$dateToString", "sample_value": "{\"date\": \"$createdAt\", \"format\": \"%Y-%m-%d\"}", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Date Operators", "oracle_feature": "nan"}, {"feature_type": "expression", "feature_name": "$dayOfMonth", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[1].$project.orderDay.$dayOfMonth", "sample_value": "\"$createdAt\"", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Date Operators", "oracle_feature": "nan"}, {"feature_type": "expression", "feature_name": "$filter", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[1].$project.paperItems.$filter", "sample_value": "{\"as\": \"item\", \"cond\": {\"$in\": [\"paper\", \"$$item.tags\"]}, \"input\": \"$items\"}", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Array Operators", "oracle_feature": "nan"}, {"feature_type": "expression", "feature_name": "$map", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[1].$project.itemSkus.$map", "sample_value": "{\"as\": \"item\", \"in\": {\"$concat\": [\"$$item.sku\", \"-\", {\"$toString\": \"$$item.qty\"}]}, \"input\": \"$items\"}", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Miscellaneous Operators", "oracle_feature": "nan"}, {"feature_type": "expression", "feature_name": "$max", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[0].$group.amountMax.$max", "sample_value": "\"$amount\"", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Field Update Operators", "oracle_feature": "nan"}, {"feature_type": "expression", "feature_name": "$min", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[0].$group.amountMin.$min", "sample_value": "\"$amount\"", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Field Update Operators", "oracle_feature": "nan"}, {"feature_type": "expression", "feature_name": "$month", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[1].$project.orderMonth.$month", "sample_value": "\"$createdAt\"", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Date Operators", "oracle_feature": "nan"}, {"feature_type": "expression", "feature_name": "$reduce", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[1].$project.qtyTotal.$reduce", "sample_value": "{\"in\": {\"$add\": [\"$$value\", \"$$this.qty\"]}, \"initialValue\": 0, \"input\": \"$items\"}", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Array Operators", "oracle_feature": "nan"}, {"feature_type": "expression", "feature_name": "$toString", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[1].$project.itemSkus.$map.in.$concat[2].$toString", "sample_value": "\"$$item.qty\"", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Type Operators", "oracle_feature": "nan"}, {"feature_type": "expression", "feature_name": "$year", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[1].$project.orderYear.$year", "sample_value": "\"$createdAt\"", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Date Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$all", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.items.$elemMatch.tags.$all", "sample_value": "[\"paper\"]", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Array Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$and", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.$and", "sample_value": "[{\"channel\": {\"$nin\": [\"partner\"]}}, {\"note\": {\"$exists\": true}}]", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Logical Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$elemMatch", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.items.$elemMatch", "sample_value": "{\"qty\": {\"$gt\": 0}, \"tags\": {\"$all\": [\"paper\"]}}", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Array Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$exists", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.$and[1].note.$exists", "sample_value": "true", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Element Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$gt", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[0].$match.amount.$gt", "sample_value": "50", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Comparison Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$gt", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.items.$elemMatch.qty.$gt", "sample_value": "0", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Comparison Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$gte", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[0].$match.amount.$gte", "sample_value": "200", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Comparison Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$gte", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.amount.$gte", "sample_value": "100", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Comparison Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$in", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[0].$match.status.$in", "sample_value": "[\"PAID\", \"SHIPPED\", \"NEW\"]", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Comparison Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$in", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.status.$in", "sample_value": "[\"PAID\", \"SHIPPED\"]", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Comparison Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$lt", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.amount.$lt", "sample_value": "800", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Comparison Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$lte", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.$or[1].discount.$lte", "sample_value": "20", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Comparison Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$ne", "command_name": "aggregate", "op_type": "insert", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.647000+00:00", "last_seen": "2026-04-10T04:41:01.647000+00:00", "max_duration_ms": 12, "sample_path": "command.pipeline[0].$match.status.$ne", "sample_value": "\"CANCELLED\"", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Comparison Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$ne", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.amount.$ne", "sample_value": "500", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Comparison Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$nin", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.$and[0].channel.$nin", "sample_value": "[\"partner\"]", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Comparison Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$nor", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.$nor", "sample_value": "[{\"status\": \"CANCELLED\"}]", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Logical Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$not", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.channel.$not", "sample_value": "{\"$eq\": \"legacy\"}", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Logical Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$or", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.$or", "sample_value": "[{\"discount\": {\"$eq\": 16}}, {\"discount\": {\"$lte\": 20}}]", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Logical Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$regex", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.shipping.city.$regex", "sample_value": "\"^Sh\"", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Evaluation Query Operators", "oracle_feature": "nan"}, {"feature_type": "operator", "feature_name": "$size", "command_name": "find", "op_type": "query", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.607000+00:00", "last_seen": "2026-04-10T04:41:01.607000+00:00", "max_duration_ms": 0, "sample_path": "command.filter.tags.$size", "sample_value": "0", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Array Query Operators", "oracle_feature": "nan"}, {"feature_type": "stage", "feature_name": "$count", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[1].$count", "sample_value": "\"total\"", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "stage", "feature_name": "$facet", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[4].$facet", "sample_value": "{\"byStatus\": [{\"$group\": {\"_id\": \"$status\", \"amountAvg\": {\"$avg\": \"$amount\"}, \"amountMax\": {\"$max\": \"$amount\"}, \"amountMin\": {\"$min\": \"$amount\"}, \"orderCount\": {\"$sum\": 1}}}, {\"$sort\": {\"_id\": 1}}], \"expensiveOrders\": [{\"$match\": {\"amount\": {\"$gte\": 200}}}, {\"$count\": \"total\"}]}", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "stage", "feature_name": "$limit", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.615000+00:00", "last_seen": "2026-04-10T04:41:01.615000+00:00", "max_duration_ms": 0, "sample_path": "command.pipeline[5].$limit", "sample_value": "3", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "stage", "feature_name": "$lookup", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[2].$lookup", "sample_value": "{\"as\": \"customerInfo\", \"foreignField\": \"_id\", \"from\": \"customers\", \"localField\": \"customerId\", \"pipeline\": [{\"$project\": {\"emailSafe\": {\"$ifNull\": [\"$email\", \"unknown\"]}, \"name\": 1, \"tags\": 1, \"tier\": 1}}]}", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "stage", "feature_name": "$match", "command_name": "aggregate", "op_type": "insert", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.647000+00:00", "last_seen": "2026-04-10T04:41:01.647000+00:00", "max_duration_ms": 12, "sample_path": "command.pipeline[0].$match", "sample_value": "{\"status\": {\"$ne\": \"CANCELLED\"}}", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "stage", "feature_name": "$merge", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.631000+00:00", "last_seen": "2026-04-10T04:41:01.631000+00:00", "max_duration_ms": 12, "sample_path": "command.pipeline[2].$merge", "sample_value": "{\"into\": \"order_metrics\", \"on\": \"_id\", \"whenMatched\": \"replace\", \"whenNotMatched\": \"insert\"}", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "stage", "feature_name": "$out", "command_name": "aggregate", "op_type": "insert", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.647000+00:00", "last_seen": "2026-04-10T04:41:01.647000+00:00", "max_duration_ms": 12, "sample_path": "command.pipeline[2].$out", "sample_value": "\"order_archive\"", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "stage", "feature_name": "$project", "command_name": "aggregate", "op_type": "insert", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.647000+00:00", "last_seen": "2026-04-10T04:41:01.647000+00:00", "max_duration_ms": 12, "sample_path": "command.pipeline[1].$project", "sample_value": "{\"amount\": 1, \"orderNo\": 1, \"status\": 1}", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "stage", "feature_name": "$set", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.615000+00:00", "last_seen": "2026-04-10T04:41:01.615000+00:00", "max_duration_ms": 0, "sample_path": "command.pipeline[1].$set", "sample_value": "{\"amountBucket\": {\"$cond\": [{\"$gte\": [\"$amount\", 200]}, \"high\", \"normal\"]}}", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "stage", "feature_name": "$skip", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.615000+00:00", "last_seen": "2026-04-10T04:41:01.615000+00:00", "max_duration_ms": 0, "sample_path": "command.pipeline[4].$skip", "sample_value": "0", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "stage", "feature_name": "$unset", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.615000+00:00", "last_seen": "2026-04-10T04:41:01.615000+00:00", "max_duration_ms": 0, "sample_path": "command.pipeline[2].$unset", "sample_value": "\"comment\"", "oracle_support_status": "Supported", "oracle_support_since": "19c", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}, {"feature_type": "stage", "feature_name": "$unwind", "command_name": "aggregate", "op_type": "command", "database": "oracle_mongo_api_test", "collection": "orders", "usage_count": 1, "first_seen": "2026-04-10T04:41:01.612000+00:00", "last_seen": "2026-04-10T04:41:01.612000+00:00", "max_duration_ms": 1, "sample_path": "command.pipeline[3].$unwind", "sample_value": "\"$customerInfo\"", "oracle_support_status": "Not Supported", "oracle_support_since": "26ai", "oracle_category": "Aggregation Pipeline Stages", "oracle_feature": "nan"}]};
+    const statusColorMap = {
+      "Supported": "#2e8b57",
+      "Not Supported": "#d9534f",
+      "Partially Supported": "#f0ad4e",
+      "Other": "#6c757d",
+      "Unknown": "#6c757d",
+    };
+    const palette = ["#0f3b45", "#176b72", "#2f8f83", "#58a69b", "#7cc3b5", "#f0ad4e", "#e67e22", "#4c78a8"];
+    const oracleVersionFilter = document.getElementById("oracle-version-filter");
+    const oracleModeFilter = document.getElementById("oracle-mode-filter");
+    const keywordFilter = document.getElementById("keyword-filter");
+    const statusFilter = document.getElementById("status-filter");
+    const opFilter = document.getElementById("op-filter");
+    const featureTypeFilter = document.getElementById("feature-type-filter");
+    const commandFilter = document.getElementById("command-filter");
+    const evidenceSelect = document.getElementById("evidence-select");
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+    function selectedValues(container) {
+      return Array.from(container.querySelectorAll("input[type='checkbox']:checked")).map((input) => input.value);
+    }
+    function uniqueSorted(values) {
+      return [...new Set(values.filter((value) => String(value || "").trim() !== ""))]
+        .sort((left, right) => String(left).localeCompare(String(right), "zh-CN"));
+    }
+    function normalizeOracleVersion(value) {
+      return String(value || "").trim().toLowerCase().replaceAll(" ", "");
+    }
+    function normalizeSupportMode(value) {
+      const normalized = String(value || "").trim().toLowerCase();
+      if (["any", "任意部署方式", "任意"].includes(normalized)) return "any";
+      if (["noop", "no-op", "no_op"].includes(normalized)) return "no-op";
+      return "op";
+    }
+    function oracleVersionRank(value) {
+      const normalized = normalizeOracleVersion(value);
+      const match = normalized.match(/^(\d+)(ai|c)$/);
+      if (!match) return null;
+      return [Number(match[1]), match[2] === "ai" ? 1 : 0];
+    }
+    function compareRanks(left, right) {
+      if (!left || !right) return 0;
+      if (left[0] !== right[0]) return left[0] - right[0];
+      return left[1] - right[1];
+    }
+    function extractOracleVersions(rawValue) {
+      const matches = String(rawValue || "").match(/\b(\d+\s*(?:ai|c))\b/gi) || [];
+      const values = [];
+      matches.forEach((token) => {
+        const normalized = normalizeOracleVersion(token);
+        if (normalized && !values.includes(normalized)) values.push(normalized);
+      });
+      return values;
+    }
+    function availableOracleVersions() {
+      const values = [];
+      reportData.detailRows.forEach((row) => {
+        extractOracleVersions(row.oracle_support_since || "").forEach((version) => {
+          if (!values.includes(version)) values.push(version);
+        });
+      });
+      if (!values.length) values.push("19c", "26ai");
+      values.sort((left, right) => compareRanks(oracleVersionRank(left), oracleVersionRank(right)));
+      return values;
+    }
+    function effectiveOracleSupportStatus(supportSinceValue, targetVersion, targetMode) {
+      const text = String(supportSinceValue || "").trim();
+      if (!text) return "Unknown";
+      const low = text.toLowerCase();
+      if (["not supported", "unsupported", "not applicable"].some((item) => low.includes(item)) || ["no", "n/a", "na"].includes(low)) return "Not Supported";
+      const candidateVersions = extractOracleVersions(text);
+      const versionsToCheck = ["", "任意版本", "任意"].includes(String(targetVersion || "").trim())
+        ? (candidateVersions.length ? candidateVersions : ["19c", "26ai"])
+        : [normalizeOracleVersion(targetVersion)];
+      const normalizedTargetMode = normalizeSupportMode(targetMode);
+      const modesToCheck = normalizedTargetMode === "any" ? ["op", "no-op"] : [normalizedTargetMode];
+      const noOpOnlyVersions = [];
+      if (low.includes("no-op")) {
+        const matches = String(text).match(/\(([^)]*)\)/g) || [];
+        matches.forEach((segment) => {
+          extractOracleVersions(segment).forEach((version) => {
+            if (!noOpOnlyVersions.includes(version)) noOpOnlyVersions.push(version);
+          });
+        });
+      }
+      const baseText = text.replace(/\([^)]*\)/g, " ");
+      const baseVersions = extractOracleVersions(baseText);
+      for (const version of versionsToCheck) {
+        const versionRank = oracleVersionRank(version);
+        for (const mode of modesToCheck) {
+          if (low === "no-op") {
+            if (mode === "no-op" && ["19c", "26ai"].includes(version)) return "Supported";
+            continue;
+          }
+          if (mode === "no-op" && noOpOnlyVersions.includes(version)) return "Supported";
+          if (baseVersions.length && versionRank) {
+            const rankedVersions = baseVersions.map((item) => oracleVersionRank(item)).filter(Boolean).sort(compareRanks);
+            if (rankedVersions.length && compareRanks(versionRank, rankedVersions[0]) >= 0) return "Supported";
+          }
+        }
+      }
+      return "Not Supported";
+    }
+    function currentOracleTargetVersion() {
+      return oracleVersionFilter.value || reportData.oracleTargetVersion || "任意版本";
+    }
+    function currentOracleTargetMode() {
+      const value = normalizeSupportMode(oracleModeFilter.value || reportData.oracleTargetMode || "任意部署方式");
+      return value === "any" ? "任意部署方式" : value;
+    }
+    function withEffectiveStatus(row) {
+      const effectiveStatus = effectiveOracleSupportStatus(
+        row.oracle_support_since || "",
+        currentOracleTargetVersion(),
+        currentOracleTargetMode()
+      );
+      return {
+        ...row,
+        oracle_support_status: effectiveStatus,
+      };
+    }
+    function percentage(count, total) {
+      if (!total) return "0.00";
+      return ((count / total) * 100).toFixed(2);
+    }
+    function aggregateCounts(rows, keyName, fallbackLabel) {
+      const counter = new Map();
+      rows.forEach((row) => {
+        const label = String(row[keyName] || "").trim() || fallbackLabel;
+        counter.set(label, (counter.get(label) || 0) + 1);
+      });
+      return Array.from(counter.entries())
+        .map(([label, count]) => ({ label, count, percentage: percentage(count, rows.length) }))
+        .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label, "zh-CN"));
+    }
+    function createTable(columns, rows) {
+      if (!rows.length) return "<p class='empty-state'>暂无数据</p>";
+      const thead = `<thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>`;
+      const tbody = rows.map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(row[column] ?? "")}</td>`).join("")}</tr>`).join("");
+      return `<table class="report-table">${thead}<tbody>${tbody}</tbody></table>`;
+    }
+    function populateSelect(container, values, placeholder, selected = []) {
+      const menuContent = values.length
+        ? values.map((value, index) => `
+            <label class="multi-select-option" for="${container.id}-option-${index}">
+              <input id="${container.id}-option-${index}" type="checkbox" value="${escapeHtml(value)}" ${selected.includes(value) ? "checked" : ""} />
+              <span>${escapeHtml(value)}</span>
+            </label>`).join("")
+        : `<div class="multi-select-empty">暂无可选项</div>`;
+      container.dataset.placeholder = placeholder;
+      container.innerHTML = `<button type="button" class="multi-select-button">${escapeHtml(placeholder)}</button><div class="multi-select-menu">${menuContent}</div>`;
+      const button = container.querySelector(".multi-select-button");
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        document.querySelectorAll(".multi-select.open").forEach((element) => {
+          if (element !== container) element.classList.remove("open");
+        });
+        container.classList.toggle("open");
+      });
+      container.querySelectorAll("input[type='checkbox']").forEach((input) => {
+        input.addEventListener("change", () => {
+          updateMultiSelectButton(container);
+          applyFilters();
+        });
+      });
+      updateMultiSelectButton(container);
+    }
+    function updateMultiSelectButton(container) {
+      const selected = selectedValues(container);
+      const button = container.querySelector(".multi-select-button");
+      const placeholder = container.dataset.placeholder || "请选择";
+      if (!selected.length) button.textContent = placeholder;
+      else if (selected.length === 1) button.textContent = selected[0];
+      else button.textContent = `已选择 ${selected.length} 项`;
+    }
+    function polarToCartesian(cx, cy, radius, angleInDegrees) {
+      const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
+      return { x: cx + (radius * Math.cos(angleInRadians)), y: cy + (radius * Math.sin(angleInRadians)) };
+    }
+    function describeArc(cx, cy, radius, startAngle, endAngle) {
+      const start = polarToCartesian(cx, cy, radius, endAngle);
+      const end = polarToCartesian(cx, cy, radius, startAngle);
+      const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
+      return ["M", start.x, start.y, "A", radius, radius, 0, largeArcFlag, 0, end.x, end.y].join(" ");
+    }
+    function renderStatusChart(targetId, title, items, colorResolver) {
+      const target = document.getElementById(targetId);
+      if (!items.length) {
+        target.innerHTML = `<p class="empty-state">暂无数据</p>`;
+        return;
+      }
+      const width = 640, height = 280;
+      const margin = { top: 20, right: 24, bottom: 72, left: 48 };
+      const chartWidth = width - margin.left - margin.right;
+      const chartHeight = height - margin.top - margin.bottom;
+      const maxCount = Math.max(...items.map((item) => item.count), 1);
+      const barGap = 24;
+      const barWidth = Math.max((chartWidth - barGap * (items.length - 1)) / Math.max(items.length, 1), 48);
+      const barsSvg = items.map((item, index) => {
+        const color = colorResolver(item, index);
+        const barHeight = (item.count / maxCount) * chartHeight;
+        const x = margin.left + index * (barWidth + barGap);
+        const y = margin.top + chartHeight - barHeight;
+        const labelX = x + barWidth / 2;
+        return `<g><rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" rx="4" fill="${color}"><title>${escapeHtml(item.label)}: ${item.count} (${item.percentage}%)</title></rect><text x="${labelX}" y="${y - 8}" text-anchor="middle" font-size="12" fill="#57727a">${escapeHtml(String(item.count))}</text><text x="${labelX}" y="${height - 28}" text-anchor="middle" font-size="12" fill="#15202b">${escapeHtml(item.label)}</text></g>`;
+      }).join("");
+      const axisSvg = `<line x1="${margin.left}" y1="${margin.top + chartHeight}" x2="${margin.left + chartWidth}" y2="${margin.top + chartHeight}" stroke="#cfd8db" stroke-width="1" /><line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${margin.top + chartHeight}" stroke="#cfd8db" stroke-width="1" />`;
+      target.innerHTML = `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(title)}">${axisSvg}${barsSvg}</svg>`;
+    }
+    function renderDonutChart(targetId, title, items, colorResolver) {
+      const target = document.getElementById(targetId);
+      if (!items.length) {
+        target.innerHTML = `<p class="empty-state">暂无数据</p>`;
+        return;
+      }
+      const total = items.reduce((sum, item) => sum + item.count, 0);
+      const cx = 110, cy = 110, radius = 72, strokeWidth = 34;
+      let startAngle = 0;
+      const arcsSvg = items.map((item, index) => {
+        const portion = total ? (item.count / total) * 360 : 0;
+        const endAngle = startAngle + portion;
+        const color = colorResolver(item, index);
+        const path = describeArc(cx, cy, radius, startAngle, endAngle);
+        startAngle = endAngle;
+        return `<path d="${path}" fill="none" stroke="${color}" stroke-width="${strokeWidth}"><title>${escapeHtml(item.label)}: ${item.count} (${item.percentage}%)</title></path>`;
+      }).join("");
+      const legendHtml = items.map((item, index) => {
+        const color = colorResolver(item, index);
+        return `<div class="chart-legend-item"><span class="chart-legend-swatch" style="background:${color};"></span><span>${escapeHtml(item.label)}</span><span class="chart-legend-value">${item.count} / ${item.percentage}%</span></div>`;
+      }).join("");
+      target.innerHTML = `<svg class="chart-svg" viewBox="0 0 220 220"><circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="#e7eef0" stroke-width="${strokeWidth}"></circle>${arcsSvg}<text x="${cx}" y="${cy - 6}" text-anchor="middle" font-size="14" fill="#57727a">总计</text><text x="${cx}" y="${cy + 18}" text-anchor="middle" font-size="20" font-weight="700" fill="#15202b">${total}</text></svg><div class="chart-legend">${legendHtml}</div>`;
+    }
+    function currentFilters() {
+      return {
+        statuses: new Set(selectedValues(statusFilter)),
+        opTypes: new Set(selectedValues(opFilter)),
+        featureTypes: new Set(selectedValues(featureTypeFilter)),
+        commands: new Set(selectedValues(commandFilter)),
+        keyword: keywordFilter.value.trim().toLowerCase(),
+      };
+    }
+    function buildFilterText(row) {
+      return ["feature_name", "collection", "op_type", "command_name", "oracle_category", "oracle_support_since", "oracle_support_status"]
+        .map((column) => String(row[column] || "")).join(" ").toLowerCase();
+    }
+    function refreshStatusFilterOptions() {
+      const selected = selectedValues(statusFilter);
+      const availableStatuses = uniqueSorted(reportData.detailRows.map(withEffectiveStatus).map((row) => row.oracle_support_status || "Unknown"));
+      populateSelect(statusFilter, availableStatuses, "选择支持判断", selected.filter((item) => availableStatuses.includes(item)));
+    }
+    function effectiveRows() {
+      return reportData.detailRows.map(withEffectiveStatus);
+    }
+    function filteredRows() {
+      const filters = currentFilters();
+      return effectiveRows().filter((row) => {
+        if (filters.statuses.size && !filters.statuses.has(row.oracle_support_status || "")) return false;
+        if (filters.opTypes.size && !filters.opTypes.has(String(row.op_type || ""))) return false;
+        if (filters.featureTypes.size && !filters.featureTypes.has(String(row.feature_type || ""))) return false;
+        if (filters.commands.size && !filters.commands.has(String(row.command_name || ""))) return false;
+        if (filters.keyword && !buildFilterText(row).includes(filters.keyword)) return false;
+        return true;
+      });
+    }
+    function renderOverview(rows) {
+      document.getElementById("metric-profile-count").textContent = String(reportData.metadata.profile_count || 0);
+      document.getElementById("metric-feature-count").textContent = String(rows.length);
+      document.getElementById("metric-supported").textContent = String(rows.filter((row) => row.oracle_support_status === "Supported").length);
+      document.getElementById("metric-not-supported").textContent = String(rows.filter((row) => row.oracle_support_status === "Not Supported").length);
+      document.getElementById("metric-unknown").textContent = String(rows.filter((row) => row.oracle_support_status === "Unknown").length);
+      document.getElementById("usage-context-note").textContent = `当前支持判断基于所选组合: Oracle ${currentOracleTargetVersion()} + ${currentOracleTargetMode()}`;
+    }
+    function renderSummaries(rows) {
+      const statusRows = aggregateCounts(rows, "oracle_support_status", "Unknown");
+      const commandRows = aggregateCounts(rows, "command_name", "Unknown").slice(0, 8);
+      renderStatusChart("status-chart", "支持状态汇总", statusRows, (item) => statusColorMap[item.label] || statusColorMap.Other);
+      renderDonutChart("command-chart", "命令使用汇总", commandRows, (_, index) => palette[index % palette.length]);
+      document.getElementById("status-table").innerHTML = createTable(
+        ["是否支持", "数量", "占比(%)"],
+        statusRows.map((item) => ({ "是否支持": item.label, "数量": item.count, "占比(%)": `${item.percentage}%` }))
+      );
+      document.getElementById("command-table").innerHTML = createTable(
+        ["command_name", "数量", "占比(%)"],
+        commandRows.map((item) => ({ "command_name": item.label, "数量": item.count, "占比(%)": `${item.percentage}%` }))
+      );
+    }
+    function renderDetails(rows) {
+      const columns = ["feature_type", "feature_name", "command_name", "op_type", "database", "collection", "usage_count", "first_seen", "last_seen", "max_duration_ms", "oracle_support_status", "oracle_support_since", "oracle_category"];
+      document.getElementById("usage-detail-table").innerHTML = createTable(columns, rows);
+    }
+    function renderRisk(rows) {
+      const riskRows = rows
+        .filter((row) => ["Partially Supported", "Not Supported", "Unknown"].includes(row.oracle_support_status || ""))
+        .sort((left, right) => Number(right.usage_count || 0) - Number(left.usage_count || 0));
+      const columns = ["feature_type", "feature_name", "command_name", "op_type", "database", "collection", "usage_count", "oracle_support_status", "oracle_support_since", "oracle_category"];
+      document.getElementById("risk-table").innerHTML = createTable(columns, riskRows);
+      return riskRows;
+    }
+    function renderEvidence(rows) {
+      const evidenceRows = rows
+        .filter((row) => row.oracle_support_status === "Not Supported")
+        .sort((left, right) => Number(right.usage_count || 0) - Number(left.usage_count || 0));
+      if (!evidenceRows.length) {
+        evidenceSelect.innerHTML = `<option>当前筛选条件下没有 Not Supported 的证据样本</option>`;
+        document.getElementById("evidence-summary").textContent = "当前筛选条件下没有 Not Supported 的证据样本。";
+        document.getElementById("evidence-sample-path").textContent = "";
+        document.getElementById("evidence-sample-value").textContent = "暂无样本。";
+        return;
+      }
+      const previousValue = evidenceSelect.value;
+      evidenceSelect.innerHTML = evidenceRows.map((row, index) => {
+        const label = `${row.feature_type} | ${row.feature_name} | ${row.collection || '-'} | ${row.oracle_support_status}`;
+        return `<option value="${index}">${escapeHtml(label)}</option>`;
+      }).join("");
+      if (previousValue && Number(previousValue) < evidenceRows.length) evidenceSelect.value = previousValue;
+      const selectedRow = evidenceRows[Number(evidenceSelect.value || 0)] || evidenceRows[0];
+      document.getElementById("evidence-summary").innerHTML = `
+        <div>- feature_type: ${escapeHtml(selectedRow.feature_type || "")}</div>
+        <div>- feature_name: ${escapeHtml(selectedRow.feature_name || "")}</div>
+        <div>- command_name: ${escapeHtml(selectedRow.command_name || "")}</div>
+        <div>- op_type: ${escapeHtml(selectedRow.op_type || "-")}</div>
+        <div>- database.collection: ${escapeHtml(`${selectedRow.database || ""}.${selectedRow.collection || ""}`)}</div>
+        <div>- usage_count: ${escapeHtml(String(selectedRow.usage_count || ""))}</div>
+        <div>- oracle_support_status: ${escapeHtml(selectedRow.oracle_support_status || "")}</div>
+        <div>- oracle_support_since: ${escapeHtml(selectedRow.oracle_support_since || "-")}</div>
+        <div>- oracle_category: ${escapeHtml(selectedRow.oracle_category || "-")}</div>
+      `;
+      document.getElementById("evidence-sample-path").innerHTML = `<strong>sample_path</strong>: <code>${escapeHtml(selectedRow.sample_path || "")}</code>`;
+      document.getElementById("evidence-sample-value").textContent = String(selectedRow.sample_value || "暂无样本。");
+    }
+    function applyFilters() {
+      const rows = filteredRows();
+      const effective = effectiveRows();
+      renderOverview(effective);
+      renderSummaries(effective);
+      renderDetails(rows);
+      renderRisk(rows);
+      renderEvidence(rows);
+    }
+    function init() {
+      const oracleVersions = ["任意版本", ...availableOracleVersions()];
+      oracleVersionFilter.innerHTML = oracleVersions.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("");
+      oracleVersionFilter.value = reportData.oracleTargetVersion || "任意版本";
+      oracleModeFilter.value = reportData.oracleTargetMode || "任意部署方式";
+      populateSelect(statusFilter, uniqueSorted(reportData.detailRows.map((row) => row.oracle_support_status || "")), "选择支持判断", reportData.initialFilters.statuses || []);
+      populateSelect(opFilter, uniqueSorted(reportData.detailRows.map((row) => row.op_type || "")), "选择 Profile op", reportData.initialFilters.opTypes || []);
+      populateSelect(featureTypeFilter, uniqueSorted(reportData.detailRows.map((row) => row.feature_type || "")), "选择功能类型", reportData.initialFilters.featureTypes || []);
+      populateSelect(commandFilter, uniqueSorted(reportData.detailRows.map((row) => row.command_name || "")), "选择命令", reportData.initialFilters.commands || []);
+      keywordFilter.value = reportData.initialFilters.keyword || "";
+      refreshStatusFilterOptions();
+      oracleVersionFilter.addEventListener("change", () => { refreshStatusFilterOptions(); applyFilters(); });
+      oracleModeFilter.addEventListener("change", () => { refreshStatusFilterOptions(); applyFilters(); });
+      keywordFilter.addEventListener("input", applyFilters);
+      evidenceSelect.addEventListener("change", () => renderEvidence(filteredRows()));
+      document.addEventListener("click", (event) => {
+        [statusFilter, opFilter, featureTypeFilter, commandFilter].forEach((container) => {
+          if (!container.contains(event.target)) container.classList.remove("open");
+        });
+      });
+      applyFilters();
+    }
+    init();
+  </script>
+</body>
+</html>
