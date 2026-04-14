@@ -1,0 +1,14 @@
+feature_name,feature_type,migration_scope,scope_confidence,needs_review,default_complexity,complexity_reason,recommended_action,review_priority,notes,enabled
+$sum,expression,application_api,high,false,Low,Common aggregate expression,direct_use,P2,,true
+$avg,expression,application_api,high,false,Low,Common aggregate expression,direct_use,P2,,true
+$min,expression,application_api,high,false,Low,Common aggregate expression,direct_use,P2,,true
+$max,expression,application_api,high,false,Low,Common aggregate expression,direct_use,P2,,true
+$cond,expression,application_api,medium,false,Medium,Conditional expression needs verification,verify_semantics,P1,,true
+$ifNull,expression,application_api,medium,false,Medium,Null-handling semantics need testing,verify_semantics,P1,,true
+$concat,expression,application_api,medium,false,Medium,String expression behavior needs review,verify_semantics,P1,,true
+$dateToString,expression,application_api,medium,false,Medium,Date formatting semantics need testing,verify_semantics,P1,,true
+$map,expression,application_api,high,false,High,Collection transformation logic is migration-heavy,rewrite_aggregation,P0,,true
+$filter,expression,application_api,high,false,High,Collection transformation logic is migration-heavy,rewrite_aggregation,P0,,true
+$reduce,expression,application_api,high,false,High,Stateful array reduction often needs redesign,rewrite_aggregation,P0,,true
+$regexMatch,expression,application_api,high,false,High,Regex expression semantics and performance require review,manual_assessment,P1,,true
+$setField,expression,application_api,high,false,High,Dynamic field manipulation often needs redesign,manual_assessment,P0,,true

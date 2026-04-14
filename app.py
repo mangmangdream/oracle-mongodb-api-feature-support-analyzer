@@ -24,6 +24,10 @@ from src.oracle_feature_support.mongodb_profile_reader import (
     read_system_profile,
     test_mongodb_connection,
 )
+from src.oracle_feature_support.mongodb_testkit import (
+    run_profile_exercises,
+    seed_test_data,
+)
 from src.oracle_feature_support.mongodb_reference import (
     ABOUT_URL,
     MONGODB_REFERENCE_SOURCES,
@@ -31,6 +35,12 @@ from src.oracle_feature_support.mongodb_reference import (
     load_mongodb_reference_catalog,
     load_mongodb_reference_metadata,
     sync_mongodb_reference_catalog,
+)
+from src.oracle_feature_support.migration_assessment import assess_migration_complexity
+from src.oracle_feature_support.migration_rules import (
+    ALLOWED_COMPLEXITY,
+    load_migration_rules,
+    save_customer_overrides,
 )
 from src.oracle_feature_support.profile_parser import (
     events_to_dataframe,
@@ -45,7 +55,7 @@ from src.oracle_feature_support.usage_report import (
 SETTINGS_PATH = Path("outputs/.ui_settings.json")
 WORKSPACE_PANEL_HEIGHT = 1120
 
-st.set_page_config(page_title="Oracle MongoDB API Feature Support", layout="wide")
+st.set_page_config(page_title="Oracle Database API for MongoDB Feature Support", layout="wide")
 st.markdown(
     """
     <style>
@@ -319,6 +329,10 @@ if "mongo_usage_restored_from_disk" not in st.session_state:
     st.session_state.mongo_usage_restored_from_disk = False
 if "oracle_cache_save_notice" not in st.session_state:
     st.session_state.oracle_cache_save_notice = ""
+if "oracle_selected_cache_dir" not in st.session_state:
+    st.session_state.oracle_selected_cache_dir = ""
+if "confirm_clear_oracle_caches" not in st.session_state:
+    st.session_state.confirm_clear_oracle_caches = False
 if "mongo_usage_cache_save_notice" not in st.session_state:
     st.session_state.mongo_usage_cache_save_notice = ""
 if "settings_loaded" not in st.session_state:
@@ -339,10 +353,32 @@ if "mongo_usage_output_dir" not in st.session_state:
     st.session_state.mongo_usage_output_dir = None
 if "mongo_usage_metadata" not in st.session_state:
     st.session_state.mongo_usage_metadata = {}
+if "mongo_usage_migration_summary_df" not in st.session_state:
+    st.session_state.mongo_usage_migration_summary_df = None
+if "mongo_usage_baseline_df" not in st.session_state:
+    st.session_state.mongo_usage_baseline_df = None
+if "mongo_usage_hotspots_df" not in st.session_state:
+    st.session_state.mongo_usage_hotspots_df = None
+if "mongo_usage_excluded_df" not in st.session_state:
+    st.session_state.mongo_usage_excluded_df = None
+if "mongo_usage_override_save_notice" not in st.session_state:
+    st.session_state.mongo_usage_override_save_notice = ""
 if "mongo_usage_trace_logs" not in st.session_state:
     st.session_state.mongo_usage_trace_logs = []
 if "mongo_usage_connection_test" not in st.session_state:
     st.session_state.mongo_usage_connection_test = {}
+if "mongo_testkit_trace_logs" not in st.session_state:
+    st.session_state.mongo_testkit_trace_logs = []
+if "mongo_testkit_connection_test" not in st.session_state:
+    st.session_state.mongo_testkit_connection_test = {}
+if "mongo_testkit_seed_result" not in st.session_state:
+    st.session_state.mongo_testkit_seed_result = {}
+if "mongo_testkit_exercise_result" not in st.session_state:
+    st.session_state.mongo_testkit_exercise_result = {}
+if "mongo_usage_selected_cache_dir" not in st.session_state:
+    st.session_state.mongo_usage_selected_cache_dir = ""
+if "confirm_clear_usage_caches" not in st.session_state:
+    st.session_state.confirm_clear_usage_caches = False
 if "feature_detail_target_version" not in st.session_state:
     st.session_state.feature_detail_target_version = "任意版本"
 if "feature_detail_target_mode" not in st.session_state:
@@ -351,6 +387,12 @@ if "usage_analysis_target_version" not in st.session_state:
     st.session_state.usage_analysis_target_version = "任意版本"
 if "usage_analysis_target_mode" not in st.session_state:
     st.session_state.usage_analysis_target_mode = "任意部署方式"
+if "usage_complexity_filter" not in st.session_state:
+    st.session_state.usage_complexity_filter = []
+if "usage_scope_filter" not in st.session_state:
+    st.session_state.usage_scope_filter = []
+if "usage_baseline_show_advanced_columns" not in st.session_state:
+    st.session_state.usage_baseline_show_advanced_columns = False
 
 
 def _parse_optional_datetime(value: str) -> datetime | None:
@@ -544,7 +586,7 @@ def _save_ui_settings() -> None:
                 "max_retries": int(st.session_state.ui_max_retries),
                 "show_debug_log": bool(st.session_state.ui_show_debug),
                 "mongo_usage_uri": str(st.session_state.get("mongo_usage_uri", "") or ""),
-                "mongo_usage_database": str(st.session_state.get("mongo_usage_database", "") or ""),
+                "mongo_testkit_uri": str(st.session_state.get("mongo_testkit_uri", "") or ""),
             },
             ensure_ascii=False,
             indent=2,
@@ -590,7 +632,7 @@ if not st.session_state.settings_loaded:
     st.session_state.ui_max_retries = int(saved_settings.get("max_retries", 3))
     st.session_state.ui_show_debug = bool(saved_settings.get("show_debug_log", True))
     st.session_state.mongo_usage_uri = str(saved_settings.get("mongo_usage_uri", "") or "")
-    st.session_state.mongo_usage_database = str(saved_settings.get("mongo_usage_database", "") or "")
+    st.session_state.mongo_testkit_uri = str(saved_settings.get("mongo_testkit_uri", "") or "")
     st.session_state.settings_loaded = True
 
 if st.session_state.reference_df.empty:
@@ -735,6 +777,25 @@ def _prune_output_dirs(pattern: str, keep: int = 1, output_root: str = "outputs"
         shutil.rmtree(stale_dir, ignore_errors=True)
 
 
+def _list_output_dirs(pattern: str, output_root: str = "outputs") -> list[Path]:
+    root = Path(output_root)
+    if not root.exists():
+        return []
+    return sorted(
+        [path for path in root.glob(pattern) if path.is_dir()],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def _clear_output_dirs(pattern: str, output_root: str = "outputs") -> int:
+    removed_count = 0
+    for cache_dir in _list_output_dirs(pattern, output_root=output_root):
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        removed_count += 1
+    return removed_count
+
+
 def _persist_oracle_cache(
     detail_df: pd.DataFrame,
     summary_df: pd.DataFrame,
@@ -749,7 +810,7 @@ def _persist_oracle_cache(
     )
     (output_dir / "feature_support_report.html").write_text(report_html, encoding="utf-8")
     (output_dir / "feature_support_analysis.xlsx").write_bytes(workbook_bytes)
-    _prune_output_dirs("feature_support_*", keep=1)
+    _prune_output_dirs("feature_support_*", keep=10)
     return output_dir
 
 
@@ -759,15 +820,22 @@ def _persist_usage_cache(
     metadata: dict[str, object],
     report_html: str,
     workbook_bytes: bytes,
+    migration_summary_df: pd.DataFrame | None = None,
+    hotspots_df: pd.DataFrame | None = None,
+    excluded_df: pd.DataFrame | None = None,
 ) -> Path:
     artifacts = write_usage_analysis_outputs(
         detail_df=detail_df,
         summary_df=summary_df,
         metadata=metadata,
+        migration_detail_df=detail_df,
+        migration_summary_df=migration_summary_df,
+        migration_hotspots_df=hotspots_df,
+        migration_excluded_df=excluded_df,
     )
     (artifacts.output_dir / "mongodb_usage_report.html").write_text(report_html, encoding="utf-8")
     (artifacts.output_dir / "mongodb_usage_analysis.xlsx").write_bytes(workbook_bytes)
-    _prune_output_dirs("mongodb_usage_*", keep=1)
+    _prune_output_dirs("mongodb_usage_*", keep=10)
     return artifacts.output_dir
 
 
@@ -790,7 +858,7 @@ def _latest_oracle_entry_count(output_root: str = "outputs") -> int | None:
         return None
 
 
-doc_tab, usage_tab = st.tabs(["文档同步", "MongoDB Usage Analysis"])
+doc_tab, usage_tab, testkit_tab = st.tabs(["文档同步", "MongoDB Usage 分析", "MongoDB 测试工具"])
 
 with doc_tab:
     doc_left_col, doc_right_col = st.columns([1.0, 2.15], gap="large")
@@ -1134,9 +1202,16 @@ def _filter_usage_detail_df(
     selected_op_types: list[str],
     selected_feature_types: list[str],
     selected_commands: list[str],
+    selected_complexities: list[str],
+    selected_scopes: list[str],
     keyword: str,
 ) -> pd.DataFrame:
     filtered = df.copy()
+    necessity_column = (
+        "effective_migration_necessity"
+        if "effective_migration_necessity" in filtered.columns
+        else "effective_scope"
+    )
 
     if selected_statuses:
         filtered = filtered[filtered["oracle_support_status"].isin(selected_statuses)]
@@ -1146,6 +1221,10 @@ def _filter_usage_detail_df(
         filtered = filtered[filtered["feature_type"].isin(selected_feature_types)]
     if selected_commands:
         filtered = filtered[filtered["command_name"].isin(selected_commands)]
+    if selected_complexities and "effective_complexity" in filtered.columns:
+        filtered = filtered[filtered["effective_complexity"].isin(selected_complexities)]
+    if selected_scopes and necessity_column in filtered.columns:
+        filtered = filtered[filtered[necessity_column].isin(selected_scopes)]
     if keyword.strip():
         lowered_keyword = keyword.strip().lower()
         search_cols = [
@@ -1156,6 +1235,9 @@ def _filter_usage_detail_df(
             "oracle_category",
             "oracle_support_since",
             "oracle_support_status",
+            "effective_complexity",
+            necessity_column,
+            "recommended_action",
         ]
         available_search_cols = [col for col in search_cols if col in filtered.columns]
         if available_search_cols:
@@ -1166,6 +1248,99 @@ def _filter_usage_detail_df(
             filtered = filtered[mask]
 
     return filtered
+
+
+def _filter_baseline_df(
+    df: pd.DataFrame,
+    selected_statuses: list[str],
+    selected_feature_types: list[str],
+    selected_commands: list[str],
+    selected_complexities: list[str],
+    selected_scopes: list[str],
+    keyword: str,
+    only_observed: bool = False,
+) -> pd.DataFrame:
+    filtered = df.copy()
+    necessity_column = (
+        "effective_migration_necessity"
+        if "effective_migration_necessity" in filtered.columns
+        else "effective_scope"
+    )
+
+    if only_observed and "observed_in_profile" in filtered.columns:
+        filtered = filtered[filtered["observed_in_profile"].fillna(False).astype(bool)]
+    if selected_feature_types and "feature_type" in filtered.columns:
+        filtered = filtered[filtered["feature_type"].isin(selected_feature_types)]
+    if selected_complexities and "effective_complexity" in filtered.columns:
+        filtered = filtered[filtered["effective_complexity"].isin(selected_complexities)]
+    if selected_scopes and necessity_column in filtered.columns:
+        filtered = filtered[filtered[necessity_column].isin(selected_scopes)]
+    if selected_statuses and "oracle_support_statuses" in filtered.columns:
+        filtered = filtered[
+            filtered["oracle_support_statuses"].fillna("").astype(str).apply(
+                lambda value: any(status in {item.strip() for item in value.split(",")} for status in selected_statuses)
+            )
+        ]
+    if selected_commands:
+        candidate_cols = [col for col in ["feature_name", "observed_command_contexts"] if col in filtered.columns]
+        if candidate_cols:
+            filtered = filtered[
+                filtered[candidate_cols].fillna("").astype(str).apply(
+                    lambda row: any(command in {item.strip() for item in ",".join(row.tolist()).split(",")} for command in selected_commands),
+                    axis=1,
+                )
+            ]
+    if keyword.strip():
+        lowered_keyword = keyword.strip().lower()
+        search_cols = [
+            col for col in [
+                "feature_name",
+                "feature_type",
+                "oracle_section",
+                "oracle_support_since",
+                "oracle_support_statuses",
+                "mongo_short_description",
+                "effective_complexity",
+                necessity_column,
+                "complexity_explanation",
+                "observed_command_contexts",
+            ] if col in filtered.columns
+        ]
+        if search_cols:
+            mask = filtered[search_cols].fillna("").astype(str).apply(
+                lambda row: row.str.lower().str.contains(lowered_keyword, regex=False).any(),
+                axis=1,
+            )
+            filtered = filtered[mask]
+
+    return filtered
+
+
+def _unique_api_count(df: pd.DataFrame) -> int:
+    if df.empty:
+        return 0
+
+    key_columns = [
+        column
+        for column in ["feature_type", "feature_name", "oracle_section", "oracle_category", "oracle_support_since"]
+        if column in df.columns
+    ]
+    if not key_columns:
+        return len(df)
+
+    normalized = df[key_columns].copy().fillna("").astype(str)
+    if "oracle_section" in normalized.columns and "oracle_category" in normalized.columns:
+        normalized["oracle_scope_key"] = normalized["oracle_section"].where(
+            normalized["oracle_section"].str.strip().ne(""),
+            normalized["oracle_category"],
+        )
+        normalized = normalized.drop(columns=["oracle_section", "oracle_category"])
+    elif "oracle_section" in normalized.columns:
+        normalized = normalized.rename(columns={"oracle_section": "oracle_scope_key"})
+    elif "oracle_category" in normalized.columns:
+        normalized = normalized.rename(columns={"oracle_category": "oracle_scope_key"})
+
+    return len(normalized.drop_duplicates())
 
 
 def _current_feature_detail_filters(df: pd.DataFrame) -> tuple[str, list[str], list[str]]:
@@ -1244,7 +1419,117 @@ def _usage_column_config() -> dict[str, object]:
             "op_type",
             help="system.profile.op 的操作类型，例如 command、query、update、insert、remove。",
         ),
+        "effective_migration_necessity": st.column_config.TextColumn(
+            "迁移必要性",
+            help="从应用兼容角度看该 API 是否有必要纳入迁移范围：Required、Conditional、Unnecessary。",
+        ),
+        "effective_complexity": st.column_config.TextColumn(
+            "迁移复杂度",
+            help="迁移复杂度分档：Ignore、Low、Medium、High、Blocker。",
+        ),
+        "migration_priority": st.column_config.TextColumn(
+            "迁移优先级",
+            help="迁移优先级，独立于复杂度，用于排序热点项。",
+        ),
+        "recommended_action": st.column_config.TextColumn(
+            "建议动作",
+            help="针对该 API 的建议动作标签。",
+        ),
     }
+
+
+def _baseline_display_columns(show_advanced: bool) -> list[str]:
+    core_columns = [
+        "feature_type",
+        "feature_name",
+        "effective_migration_necessity",
+        "oracle_support_since",
+        "effective_complexity",
+        "complexity_explanation",
+        "override_complexity",
+        "override_reason",
+    ]
+    advanced_columns = [
+        "oracle_section",
+        "oracle_support_statuses",
+        "mongo_short_description",
+        "observed_in_profile",
+        "observed_usage_count",
+        "observed_command_contexts",
+        "override_enabled",
+    ]
+    return core_columns + advanced_columns if show_advanced else core_columns
+
+
+def _safe_feature_text(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() == "nan" else text
+
+
+def _build_catalog_usage_df(detail_df: pd.DataFrame) -> pd.DataFrame:
+    if detail_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "feature_type",
+                "feature_name",
+                "command_name",
+                "op_type",
+                "database",
+                "collection",
+                "usage_count",
+                "first_seen",
+                "last_seen",
+                "max_duration_ms",
+                "sample_path",
+                "sample_value",
+                "oracle_support_status",
+                "oracle_support_since",
+                "oracle_category",
+                "mongo_short_description",
+            ]
+        )
+
+    rows: list[dict[str, object]] = []
+    for _, row in detail_df.iterrows():
+        command_name = _safe_feature_text(row.get("Command", ""))
+        stage_name = _safe_feature_text(row.get("Stage", ""))
+        operator_name = _safe_feature_text(row.get("Operator", ""))
+        feature_specs: list[tuple[str, str, str]] = []
+        if command_name:
+            feature_specs.append(("command", command_name, command_name))
+        if stage_name:
+            feature_specs.append(("stage", stage_name, "aggregate"))
+        if operator_name:
+            feature_specs.append(("operator", operator_name, command_name))
+
+        for feature_type, feature_name, command_context in feature_specs:
+            rows.append(
+                {
+                    "feature_type": feature_type,
+                    "feature_name": feature_name,
+                    "command_name": command_context,
+                    "op_type": "",
+                    "database": "",
+                    "collection": "",
+                    "usage_count": 1,
+                    "first_seen": "",
+                    "last_seen": "",
+                    "max_duration_ms": None,
+                    "sample_path": "",
+                    "sample_value": "",
+                    "oracle_support_status": str(
+                        row.get("normalized_status", "") or row.get("oracle_support_status", "") or "Unknown"
+                    ),
+                    "oracle_support_since": str(row.get("Support (Since)", "") or ""),
+                    "oracle_category": str(row.get("section", "") or ""),
+                    "mongo_short_description": str(row.get("mongo_short_description", "") or ""),
+                }
+            )
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows)
 
 
 def _format_report_table(df: pd.DataFrame, link_columns: set[str] | None = None) -> str:
@@ -1414,7 +1699,7 @@ def _build_offline_report_html(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Oracle MongoDB API Feature Support Report</title>
+  <title>Oracle Database API for MongoDB Feature Support</title>
   <style>
     :root {{
       --bg: #f4f7f8;
@@ -1823,13 +2108,13 @@ def _build_offline_report_html(
 <body>
   <div class="page">
     <div class="hero">
-      <h1>Oracle MongoDB API - Feature Support</h1>
-      <div>离线 HTML 报告</div>
-      <div class="note">生成时间: {generated_at} | 单文件离线交互快照</div>
+      <h1>Oracle Database API for MongoDB Feature Support</h1>
+      <div>离线报告</div>
+      <div class="note">生成时间：{generated_at}</div>
     </div>
 
     <section class="panel">
-      <h2>结果总览</h2>
+      <h2>结果概览</h2>
       <div class="meta-grid">
         <div class="meta-card"><div class="label">明细记录数</div><div class="value">{len(filtered_detail_df)}</div></div>
         <div class="meta-card"><div class="label">Oracle 文档版本时间</div><div class="value">{html_lib.escape(doc_metadata.get('doc_version_date', '') or '未解析到')}</div></div>
@@ -1837,11 +2122,11 @@ def _build_offline_report_html(
         <div class="meta-card"><div class="label">MongoDB 手册版本</div><div class="value">{html_lib.escape(str(reference_metadata.get('mongodb_manual_version', '')) or '未同步')}</div></div>
       </div>
       <div class="version-lines">
-        <div class="note">导出时间: {generated_at}</div>
-        <div class="note">结果目录: {html_lib.escape(output_dir)}</div>
-        <div class="note">当前支持判断组合: Oracle {html_lib.escape(oracle_target_version)} + {html_lib.escape(oracle_target_mode_display)}</div>
-        <div class="note">MongoDB 官方说明同步时间: {html_lib.escape(str(reference_metadata.get('synced_at', '未知')))} | 新增 {html_lib.escape(str(reference_metadata.get('new_entry_count', 0)))} | 更新 {html_lib.escape(str(reference_metadata.get('updated_entry_count', 0)))} | 说明已覆盖 {html_lib.escape(str(payload["mongodbDescriptionCoverage"]))}</div>
-        <div class="note">Oracle 版本判断: {html_lib.escape(doc_metadata.get('update_status', ''))}</div>
+        <div class="note">导出时间：{generated_at}</div>
+        <div class="note">结果目录：{html_lib.escape(output_dir)}</div>
+        <div class="note">当前支持判断：Oracle {html_lib.escape(oracle_target_version)} + {html_lib.escape(oracle_target_mode_display)}</div>
+        <div class="note">MongoDB 说明同步：{html_lib.escape(str(reference_metadata.get('synced_at', '未知')))} | 新增 {html_lib.escape(str(reference_metadata.get('new_entry_count', 0)))} | 更新 {html_lib.escape(str(reference_metadata.get('updated_entry_count', 0)))} | 已覆盖 {html_lib.escape(str(payload["mongodbDescriptionCoverage"]))}</div>
+        <div class="note">Oracle 版本状态：{html_lib.escape(doc_metadata.get('update_status', ''))}</div>
       </div>
     </section>
 
@@ -1854,7 +2139,7 @@ def _build_offline_report_html(
 
     <div class="panel-grid">
       <section class="panel">
-        <h2>API 支持汇总</h2>
+        <h2>支持情况分析</h2>
         <div id="status-context-note" class="note"></div>
         <div id="status-chart" class="chart-block"></div>
       </section>
@@ -1865,23 +2150,19 @@ def _build_offline_report_html(
     </div>
 
     <section class="panel">
-      <h2>Feature Support 明细分析</h2>
+      <h2>Feature Support 明细</h2>
       <div class="filter-grid">
         <div class="filter-control">
           <label for="oracle-version-filter">目标 Oracle 数据库版本</label>
-          <select id="oracle-version-filter" class="text-input"></select>
+          <select id="oracle-version-filter" class="text-input" disabled></select>
         </div>
         <div class="filter-control">
           <label for="oracle-mode-filter">部署方式</label>
-          <select id="oracle-mode-filter" class="text-input">
-            <option value="任意部署方式">任意部署方式</option>
-            <option value="op">op</option>
-            <option value="no-op">no-op</option>
-          </select>
+          <select id="oracle-mode-filter" class="text-input" disabled></select>
         </div>
         <div class="filter-control" style="grid-column: span 2;">
-          <label>当前支持判断规则</label>
-          <div class="note">根据所选 Oracle 数据库版本和部署方式组合，动态重算当前离线报告中的 Supported / Not Supported。</div>
+          <label>支持判断说明</label>
+          <div class="note">按所选 Oracle 版本和部署方式组合，动态重算当前离线报告中的支持状态。</div>
         </div>
       </div>
       <div class="filter-grid">
@@ -2544,11 +2825,11 @@ def _build_offline_report_html(
     function renderSummaries(rows) {{
       const statusRows = aggregateCounts(rows, "__status", "Other");
       document.getElementById("status-context-note").textContent =
-        `当前 API 支持汇总基于组合: Oracle ${{currentOracleTargetVersion()}} + ${{currentOracleTargetMode()}}`;
+        `当前支持判断：Oracle ${{currentOracleTargetVersion()}} + ${{currentOracleTargetMode()}}`;
 
       renderStatusChart(
         "status-chart",
-        "API 支持汇总",
+        "支持情况分析",
         statusRows,
         (item) => statusColorMap[item.label] || statusColorMap.Other
       );
@@ -2690,17 +2971,23 @@ def _build_usage_offline_report_html(
     output_dir: str,
     metadata: dict[str, object],
     detail_df: pd.DataFrame,
+    baseline_df: pd.DataFrame,
+    source_detail_row_count: int,
     target_version: str,
     target_mode: str,
     selected_statuses: list[str],
     selected_op_types: list[str],
     selected_feature_types: list[str],
     selected_commands: list[str],
+    selected_complexities: list[str],
+    selected_scopes: list[str],
     keyword: str,
+    show_baseline_advanced_columns: bool,
 ) -> str:
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     target_mode_display = _oracle_target_mode_label(target_mode)
     safe_detail_df = detail_df.copy().fillna("")
+    safe_baseline_df = baseline_df.copy().fillna("")
     payload = {
         "generatedAt": generated_at,
         "outputDir": output_dir,
@@ -2714,14 +3001,19 @@ def _build_usage_offline_report_html(
         },
         "oracleTargetVersion": str(target_version or "任意版本"),
         "oracleTargetMode": str(target_mode_display or "任意部署方式"),
+        "sourceDetailRowCount": int(source_detail_row_count or 0),
         "initialFilters": {
             "statuses": [str(item) for item in selected_statuses],
             "opTypes": [str(item) for item in selected_op_types],
             "featureTypes": [str(item) for item in selected_feature_types],
             "commands": [str(item) for item in selected_commands],
+            "complexities": [str(item) for item in selected_complexities],
+            "scopes": [str(item) for item in selected_scopes],
             "keyword": str(keyword or ""),
         },
+        "showBaselineAdvancedColumns": bool(show_baseline_advanced_columns),
         "detailRows": safe_detail_df.astype(object).to_dict(orient="records"),
+        "baselineRows": safe_baseline_df.astype(object).to_dict(orient="records"),
     }
 
     return f"""
@@ -2730,7 +3022,7 @@ def _build_usage_offline_report_html(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>MongoDB 兼容性分析报告</title>
+  <title>MongoDB Usage 分析</title>
   <style>
     :root {{
       --bg: #f4f7f8;
@@ -2742,10 +3034,6 @@ def _build_usage_offline_report_html(
       --brand-1: #0f3b45;
       --brand-2: #176b72;
       --brand-3: #2f8f83;
-      --ok: #2e8b57;
-      --warn: #f0ad4e;
-      --bad: #d9534f;
-      --other: #6c757d;
       --shadow: 0 10px 28px rgba(12, 52, 59, 0.06);
     }}
     * {{ box-sizing: border-box; }}
@@ -2774,6 +3062,7 @@ def _build_usage_offline_report_html(
       gap: 12px;
       margin-bottom: 20px;
     }}
+    .panel-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }}
     .meta-card, .panel {{
       background: var(--panel);
       border: 1px solid var(--line);
@@ -2785,7 +3074,6 @@ def _build_usage_offline_report_html(
     .meta-card .value {{ font-size: 22px; font-weight: 700; }}
     .panel {{ margin-bottom: 18px; }}
     .panel h2 {{ margin: 0 0 12px 0; font-size: 20px; }}
-    .panel-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }}
     .filter-grid {{
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2850,18 +3138,6 @@ def _build_usage_offline_report_html(
     .multi-select-option:hover {{ background: #eef5f5; }}
     .multi-select-option input {{ margin-top: 2px; }}
     .multi-select-empty {{ color: var(--muted); font-size: 13px; padding: 8px 6px; }}
-    .chart-svg {{ width: 100%; height: auto; display: block; }}
-    .chart-legend {{ display: grid; gap: 8px; margin-top: 12px; }}
-    .chart-legend-item {{
-      display: grid;
-      grid-template-columns: 12px minmax(0, 1fr) auto;
-      gap: 8px;
-      align-items: center;
-      font-size: 13px;
-      color: var(--text);
-    }}
-    .chart-legend-swatch {{ width: 12px; height: 12px; border-radius: 999px; display: inline-block; }}
-    .chart-legend-value {{ color: var(--muted); font-variant-numeric: tabular-nums; }}
     .report-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
     .report-table th, .report-table td {{
       border: 1px solid var(--line);
@@ -2869,8 +3145,8 @@ def _build_usage_offline_report_html(
       vertical-align: top;
       text-align: left;
     }}
-    .report-table th {{ background: #f1f5f6; }}
-    .table-wrap {{ overflow-x: auto; }}
+    .report-table th {{ background: #f1f5f6; position: sticky; top: 0; }}
+    .table-wrap {{ overflow-x: auto; max-height: 520px; }}
     .note {{ color: var(--muted); font-size: 13px; line-height: 1.5; }}
     .empty-state {{ color: var(--muted); margin: 0; }}
     .code-block {{
@@ -2891,40 +3167,27 @@ def _build_usage_offline_report_html(
 <body>
   <div class="page">
     <div class="hero">
-      <h1>MongoDB 兼容性分析</h1>
-      <div>离线 HTML 报告</div>
-      <div class="note">生成时间: {generated_at} | 单文件离线交互快照</div>
+      <h1>MongoDB Usage 分析</h1>
+      <div>离线报告</div>
+      <div class="note">生成时间：{generated_at}</div>
     </div>
 
     <section class="panel">
-      <h2>结果总览</h2>
+      <h2>结果概览</h2>
       <div class="meta-grid">
-        <div class="meta-card"><div class="label">Profile 样本数</div><div class="value" id="metric-profile-count">0</div></div>
-        <div class="meta-card"><div class="label">功能项数</div><div class="value" id="metric-feature-count">0</div></div>
-        <div class="meta-card"><div class="label">Supported</div><div class="value" id="metric-supported">0</div></div>
-        <div class="meta-card"><div class="label">Not Supported</div><div class="value" id="metric-not-supported">0</div></div>
-        <div class="meta-card"><div class="label">Unknown</div><div class="value" id="metric-unknown">0</div></div>
+        <div class="meta-card"><div class="label">全部唯一 API 数量</div><div class="value" id="metric-baseline-count">0</div></div>
+        <div class="meta-card"><div class="label">实际使用 API 数量</div><div class="value" id="metric-usage-count">0</div></div>
+        <div class="meta-card"><div class="label">高复杂度 API</div><div class="value" id="metric-high-complexity">0</div></div>
+        <div class="meta-card"><div class="label">热点项数量</div><div class="value" id="metric-hotspot-count">0</div></div>
+        <div class="meta-card"><div class="label">已观察到的基准 API</div><div class="value" id="metric-observed-baseline">0</div></div>
       </div>
-      <div class="note">数据库: {html_lib.escape(str(metadata.get("database_name", "") or ""))} | 抓取时间: {html_lib.escape(str(metadata.get("fetched_at", "") or ""))} | 开始时间: {html_lib.escape(str(metadata.get("start_time", "") or "未设置"))} | 结束时间: {html_lib.escape(str(metadata.get("end_time", "") or "未设置"))}</div>
-      <div class="note">当前支持判断组合: Oracle {html_lib.escape(str(target_version or "任意版本"))} + {html_lib.escape(target_mode_display)}</div>
-      <div class="note">结果目录: {html_lib.escape(output_dir)}</div>
+      <div class="note">数据库：{html_lib.escape(str(metadata.get("database_name", "") or ""))} | 抓取时间：{html_lib.escape(str(metadata.get("fetched_at", "") or ""))} | 开始时间：{html_lib.escape(str(metadata.get("start_time", "") or "未设置"))} | 结束时间：{html_lib.escape(str(metadata.get("end_time", "") or "未设置"))}</div>
+      <div class="note">当前支持判断：Oracle {html_lib.escape(str(target_version or "任意版本"))} + {html_lib.escape(target_mode_display)}</div>
+      <div class="note">结果目录：{html_lib.escape(output_dir)}</div>
     </section>
 
-    <div class="panel-grid">
-      <section class="panel">
-        <h2>支持状态汇总</h2>
-        <div id="status-chart"></div>
-        <div id="status-table" class="table-wrap"></div>
-      </section>
-      <section class="panel">
-        <h2>命令使用汇总</h2>
-        <div id="command-chart"></div>
-        <div id="command-table" class="table-wrap"></div>
-      </section>
-    </div>
-
     <section class="panel">
-      <h2>MongoDB 兼容性分析</h2>
+      <h2>分析筛选</h2>
       <div class="filter-grid">
         <div class="filter-control">
           <label for="oracle-version-filter">目标 Oracle 数据库版本</label>
@@ -2940,11 +3203,11 @@ def _build_usage_offline_report_html(
         </div>
         <div class="filter-control">
           <label for="keyword-filter">关键字搜索</label>
-          <input id="keyword-filter" class="text-input" type="text" placeholder="搜索 feature / collection / op / Oracle 分类" />
+          <input id="keyword-filter" class="text-input" type="text" placeholder="搜索 feature / collection / op / Oracle 分类 / 迁移动作" />
         </div>
         <div class="filter-control">
-          <label>当前支持判断规则</label>
-          <div class="note">根据所选 Oracle 数据库版本和部署方式组合，动态重算当前离线报告中的 Supported / Not Supported。</div>
+          <label>支持判断说明</label>
+          <div class="note">离线报告固定为导出时页面所选的 Oracle 版本和部署方式，其余筛选与页面保持一致。</div>
         </div>
       </div>
       <div class="filter-grid">
@@ -2953,28 +3216,55 @@ def _build_usage_offline_report_html(
         <div class="filter-control"><label>按功能类型筛选</label><div id="feature-type-filter" class="multi-select"></div></div>
         <div class="filter-control"><label>按命令筛选</label><div id="command-filter" class="multi-select"></div></div>
       </div>
-      <div class="note" id="usage-context-note"></div>
+      <div class="filter-grid">
+        <div class="filter-control"><label>按迁移复杂度筛选</label><div id="complexity-filter" class="multi-select"></div></div>
+        <div class="filter-control"><label>按迁移必要性筛选</label><div id="scope-filter" class="multi-select"></div></div>
+        <div class="filter-control" style="grid-column: span 2;">
+          <label>筛选说明</label>
+          <div class="note" id="usage-context-note"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>API 基准</h2>
+      <div class="meta-grid">
+        <div class="meta-card"><div class="label">文档同步明细记录数</div><div class="value" id="metric-source-detail-count">0</div></div>
+        <div class="meta-card"><div class="label">全部唯一 API 数量</div><div class="value" id="metric-baseline-total">0</div></div>
+        <div class="meta-card"><div class="label">实际使用到的 API 数量</div><div class="value" id="metric-baseline-observed">0</div></div>
+      </div>
+      <div class="note">展示文档同步得到的全部 MongoDB API 的默认迁移必要性和迁移复杂度评估。只要当前目标组合下 Oracle 标记为 Supported，默认复杂度降为 Low。</div>
+      <label class="note" style="display:flex;align-items:center;gap:8px;margin:12px 0;">
+        <input id="baseline-advanced-columns-toggle" type="checkbox" />
+        显示高级列
+      </label>
+      <div id="baseline-table" class="table-wrap"></div>
+    </section>
+
+    <section class="panel">
+      <h2>实际使用 API</h2>
+      <div class="meta-grid">
+        <div class="meta-card"><div class="label">实际使用 API 数量</div><div class="value" id="metric-workload-count">0</div></div>
+        <div class="meta-card"><div class="label">高复杂度 API</div><div class="value" id="metric-workload-high">0</div></div>
+        <div class="meta-card"><div class="label">热点项数量</div><div class="value" id="metric-workload-hotspots">0</div></div>
+      </div>
+      <div class="note">展示当前 system.profile 中实际观察到的 API，并同时给出迁移必要性、复杂度和建议动作。只要当前目标组合下 Oracle 标记为 Supported，默认复杂度降为 Low。</div>
       <div id="usage-detail-table" class="table-wrap"></div>
     </section>
 
     <section class="panel">
-      <h2>重点关注项</h2>
-      <div id="risk-table" class="table-wrap"></div>
-    </section>
-
-    <section class="panel">
-      <h2>迁移关注证据样本（仅 Not Supported）</h2>
+      <h2>证据样本</h2>
       <div class="filter-control" style="max-width:640px;">
-        <label for="evidence-select">选择一项不支持的功能查看证据</label>
+        <label for="evidence-select">选择一项实际使用 API 查看证据</label>
         <select id="evidence-select" class="text-input"></select>
       </div>
       <div class="panel-grid" style="margin-top:16px;">
         <section class="panel" style="margin-bottom:0;">
-          <h2 style="font-size:18px;">样本摘要</h2>
-          <div id="evidence-summary" class="note">当前筛选条件下没有 Not Supported 的证据样本。</div>
+          <h2 style="font-size:18px;">摘要</h2>
+          <div id="evidence-summary" class="note">当前筛选条件下没有可展示的证据样本。</div>
         </section>
         <section class="panel" style="margin-bottom:0;">
-          <h2 style="font-size:18px;">sample_value</h2>
+          <h2 style="font-size:18px;">样本值</h2>
           <div id="evidence-sample-path" class="note"></div>
           <div id="evidence-sample-value" class="code-block">暂无样本。</div>
         </section>
@@ -2983,14 +3273,6 @@ def _build_usage_offline_report_html(
   </div>
   <script>
     const reportData = {_json_for_html(payload)};
-    const statusColorMap = {{
-      "Supported": "#2e8b57",
-      "Not Supported": "#d9534f",
-      "Partially Supported": "#f0ad4e",
-      "Other": "#6c757d",
-      "Unknown": "#6c757d",
-    }};
-    const palette = ["#0f3b45", "#176b72", "#2f8f83", "#58a69b", "#7cc3b5", "#f0ad4e", "#e67e22", "#4c78a8"];
     const oracleVersionFilter = document.getElementById("oracle-version-filter");
     const oracleModeFilter = document.getElementById("oracle-mode-filter");
     const keywordFilter = document.getElementById("keyword-filter");
@@ -2998,7 +3280,10 @@ def _build_usage_offline_report_html(
     const opFilter = document.getElementById("op-filter");
     const featureTypeFilter = document.getElementById("feature-type-filter");
     const commandFilter = document.getElementById("command-filter");
+    const complexityFilter = document.getElementById("complexity-filter");
+    const scopeFilter = document.getElementById("scope-filter");
     const evidenceSelect = document.getElementById("evidence-select");
+    const baselineAdvancedColumnsToggle = document.getElementById("baseline-advanced-columns-toggle");
 
     function escapeHtml(value) {{
       return String(value ?? "")
@@ -3015,115 +3300,14 @@ def _build_usage_offline_report_html(
       return [...new Set(values.filter((value) => String(value || "").trim() !== ""))]
         .sort((left, right) => String(left).localeCompare(String(right), "zh-CN"));
     }}
-    function normalizeOracleVersion(value) {{
-      return String(value || "").trim().toLowerCase().replaceAll(" ", "");
-    }}
-    function normalizeSupportMode(value) {{
-      const normalized = String(value || "").trim().toLowerCase();
-      if (["any", "任意部署方式", "任意"].includes(normalized)) return "any";
-      if (["noop", "no-op", "no_op"].includes(normalized)) return "no-op";
-      return "op";
-    }}
-    function oracleVersionRank(value) {{
-      const normalized = normalizeOracleVersion(value);
-      const match = normalized.match(/^(\\d+)(ai|c)$/);
-      if (!match) return null;
-      return [Number(match[1]), match[2] === "ai" ? 1 : 0];
-    }}
-    function compareRanks(left, right) {{
-      if (!left || !right) return 0;
-      if (left[0] !== right[0]) return left[0] - right[0];
-      return left[1] - right[1];
-    }}
-    function extractOracleVersions(rawValue) {{
-      const matches = String(rawValue || "").match(/\\b(\\d+\\s*(?:ai|c))\\b/gi) || [];
-      const values = [];
-      matches.forEach((token) => {{
-        const normalized = normalizeOracleVersion(token);
-        if (normalized && !values.includes(normalized)) values.push(normalized);
-      }});
-      return values;
-    }}
-    function availableOracleVersions() {{
-      const values = [];
-      reportData.detailRows.forEach((row) => {{
-        extractOracleVersions(row.oracle_support_since || "").forEach((version) => {{
-          if (!values.includes(version)) values.push(version);
-        }});
-      }});
-      if (!values.length) values.push("19c", "26ai");
-      values.sort((left, right) => compareRanks(oracleVersionRank(left), oracleVersionRank(right)));
-      return values;
-    }}
-    function effectiveOracleSupportStatus(supportSinceValue, targetVersion, targetMode) {{
-      const text = String(supportSinceValue || "").trim();
-      if (!text) return "Unknown";
-      const low = text.toLowerCase();
-      if (["not supported", "unsupported", "not applicable"].some((item) => low.includes(item)) || ["no", "n/a", "na"].includes(low)) return "Not Supported";
-      const candidateVersions = extractOracleVersions(text);
-      const versionsToCheck = ["", "任意版本", "任意"].includes(String(targetVersion || "").trim())
-        ? (candidateVersions.length ? candidateVersions : ["19c", "26ai"])
-        : [normalizeOracleVersion(targetVersion)];
-      const normalizedTargetMode = normalizeSupportMode(targetMode);
-      const modesToCheck = normalizedTargetMode === "any" ? ["op", "no-op"] : [normalizedTargetMode];
-      const noOpOnlyVersions = [];
-      if (low.includes("no-op")) {{
-        const matches = String(text).match(/\\(([^)]*)\\)/g) || [];
-        matches.forEach((segment) => {{
-          extractOracleVersions(segment).forEach((version) => {{
-            if (!noOpOnlyVersions.includes(version)) noOpOnlyVersions.push(version);
-          }});
-        }});
-      }}
-      const baseText = text.replace(/\\([^)]*\\)/g, " ");
-      const baseVersions = extractOracleVersions(baseText);
-      for (const version of versionsToCheck) {{
-        const versionRank = oracleVersionRank(version);
-        for (const mode of modesToCheck) {{
-          if (low === "no-op") {{
-            if (mode === "no-op" && ["19c", "26ai"].includes(version)) return "Supported";
-            continue;
-          }}
-          if (mode === "no-op" && noOpOnlyVersions.includes(version)) return "Supported";
-          if (baseVersions.length && versionRank) {{
-            const rankedVersions = baseVersions.map((item) => oracleVersionRank(item)).filter(Boolean).sort(compareRanks);
-            if (rankedVersions.length && compareRanks(versionRank, rankedVersions[0]) >= 0) return "Supported";
-          }}
-        }}
-      }}
-      return "Not Supported";
+    function withEffectiveStatus(row) {{
+      return {{ ...row }};
     }}
     function currentOracleTargetVersion() {{
-      return oracleVersionFilter.value || reportData.oracleTargetVersion || "任意版本";
+      return reportData.oracleTargetVersion || "任意版本";
     }}
     function currentOracleTargetMode() {{
-      const value = normalizeSupportMode(oracleModeFilter.value || reportData.oracleTargetMode || "任意部署方式");
-      return value === "any" ? "任意部署方式" : value;
-    }}
-    function withEffectiveStatus(row) {{
-      const effectiveStatus = effectiveOracleSupportStatus(
-        row.oracle_support_since || "",
-        currentOracleTargetVersion(),
-        currentOracleTargetMode()
-      );
-      return {{
-        ...row,
-        oracle_support_status: effectiveStatus,
-      }};
-    }}
-    function percentage(count, total) {{
-      if (!total) return "0.00";
-      return ((count / total) * 100).toFixed(2);
-    }}
-    function aggregateCounts(rows, keyName, fallbackLabel) {{
-      const counter = new Map();
-      rows.forEach((row) => {{
-        const label = String(row[keyName] || "").trim() || fallbackLabel;
-        counter.set(label, (counter.get(label) || 0) + 1);
-      }});
-      return Array.from(counter.entries())
-        .map(([label, count]) => ({{ label, count, percentage: percentage(count, rows.length) }}))
-        .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label, "zh-CN"));
+      return reportData.oracleTargetMode || "任意部署方式";
     }}
     function createTable(columns, rows) {{
       if (!rows.length) return "<p class='empty-state'>暂无数据</p>";
@@ -3165,143 +3349,165 @@ def _build_usage_offline_report_html(
       else if (selected.length === 1) button.textContent = selected[0];
       else button.textContent = `已选择 ${{selected.length}} 项`;
     }}
-    function polarToCartesian(cx, cy, radius, angleInDegrees) {{
-      const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
-      return {{ x: cx + (radius * Math.cos(angleInRadians)), y: cy + (radius * Math.sin(angleInRadians)) }};
-    }}
-    function describeArc(cx, cy, radius, startAngle, endAngle) {{
-      const start = polarToCartesian(cx, cy, radius, endAngle);
-      const end = polarToCartesian(cx, cy, radius, startAngle);
-      const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
-      return ["M", start.x, start.y, "A", radius, radius, 0, largeArcFlag, 0, end.x, end.y].join(" ");
-    }}
-    function renderStatusChart(targetId, title, items, colorResolver) {{
-      const target = document.getElementById(targetId);
-      if (!items.length) {{
-        target.innerHTML = `<p class="empty-state">暂无数据</p>`;
-        return;
-      }}
-      const width = 640, height = 280;
-      const margin = {{ top: 20, right: 24, bottom: 72, left: 48 }};
-      const chartWidth = width - margin.left - margin.right;
-      const chartHeight = height - margin.top - margin.bottom;
-      const maxCount = Math.max(...items.map((item) => item.count), 1);
-      const barGap = 24;
-      const barWidth = Math.max((chartWidth - barGap * (items.length - 1)) / Math.max(items.length, 1), 48);
-      const barsSvg = items.map((item, index) => {{
-        const color = colorResolver(item, index);
-        const barHeight = (item.count / maxCount) * chartHeight;
-        const x = margin.left + index * (barWidth + barGap);
-        const y = margin.top + chartHeight - barHeight;
-        const labelX = x + barWidth / 2;
-        return `<g><rect x="${{x}}" y="${{y}}" width="${{barWidth}}" height="${{barHeight}}" rx="4" fill="${{color}}"><title>${{escapeHtml(item.label)}}: ${{item.count}} (${{item.percentage}}%)</title></rect><text x="${{labelX}}" y="${{y - 8}}" text-anchor="middle" font-size="12" fill="#57727a">${{escapeHtml(String(item.count))}}</text><text x="${{labelX}}" y="${{height - 28}}" text-anchor="middle" font-size="12" fill="#15202b">${{escapeHtml(item.label)}}</text></g>`;
-      }}).join("");
-      const axisSvg = `<line x1="${{margin.left}}" y1="${{margin.top + chartHeight}}" x2="${{margin.left + chartWidth}}" y2="${{margin.top + chartHeight}}" stroke="#cfd8db" stroke-width="1" /><line x1="${{margin.left}}" y1="${{margin.top}}" x2="${{margin.left}}" y2="${{margin.top + chartHeight}}" stroke="#cfd8db" stroke-width="1" />`;
-      target.innerHTML = `<svg class="chart-svg" viewBox="0 0 ${{width}} ${{height}}" role="img" aria-label="${{escapeHtml(title)}}">${{axisSvg}}${{barsSvg}}</svg>`;
-    }}
-    function renderDonutChart(targetId, title, items, colorResolver) {{
-      const target = document.getElementById(targetId);
-      if (!items.length) {{
-        target.innerHTML = `<p class="empty-state">暂无数据</p>`;
-        return;
-      }}
-      const total = items.reduce((sum, item) => sum + item.count, 0);
-      const cx = 110, cy = 110, radius = 72, strokeWidth = 34;
-      let startAngle = 0;
-      const arcsSvg = items.map((item, index) => {{
-        const portion = total ? (item.count / total) * 360 : 0;
-        const endAngle = startAngle + portion;
-        const color = colorResolver(item, index);
-        const path = describeArc(cx, cy, radius, startAngle, endAngle);
-        startAngle = endAngle;
-        return `<path d="${{path}}" fill="none" stroke="${{color}}" stroke-width="${{strokeWidth}}"><title>${{escapeHtml(item.label)}}: ${{item.count}} (${{item.percentage}}%)</title></path>`;
-      }}).join("");
-      const legendHtml = items.map((item, index) => {{
-        const color = colorResolver(item, index);
-        return `<div class="chart-legend-item"><span class="chart-legend-swatch" style="background:${{color}};"></span><span>${{escapeHtml(item.label)}}</span><span class="chart-legend-value">${{item.count}} / ${{item.percentage}}%</span></div>`;
-      }}).join("");
-      target.innerHTML = `<svg class="chart-svg" viewBox="0 0 220 220"><circle cx="${{cx}}" cy="${{cy}}" r="${{radius}}" fill="none" stroke="#e7eef0" stroke-width="${{strokeWidth}}"></circle>${{arcsSvg}}<text x="${{cx}}" y="${{cy - 6}}" text-anchor="middle" font-size="14" fill="#57727a">总计</text><text x="${{cx}}" y="${{cy + 18}}" text-anchor="middle" font-size="20" font-weight="700" fill="#15202b">${{total}}</text></svg><div class="chart-legend">${{legendHtml}}</div>`;
-    }}
     function currentFilters() {{
       return {{
         statuses: new Set(selectedValues(statusFilter)),
         opTypes: new Set(selectedValues(opFilter)),
         featureTypes: new Set(selectedValues(featureTypeFilter)),
         commands: new Set(selectedValues(commandFilter)),
+        complexities: new Set(selectedValues(complexityFilter)),
+        scopes: new Set(selectedValues(scopeFilter)),
         keyword: keywordFilter.value.trim().toLowerCase(),
       }};
     }}
-    function buildFilterText(row) {{
-      return ["feature_name", "collection", "op_type", "command_name", "oracle_category", "oracle_support_since", "oracle_support_status"]
+    function uniqueApiCount(rows) {{
+      if (!rows.length) return 0;
+      const keys = new Set();
+      rows.forEach((row) => {{
+        const scopeKey = String(row.oracle_section || row.oracle_category || "").trim();
+        const supportSince = String(row.oracle_support_since || "").trim();
+        const featureType = String(row.feature_type || "").trim();
+        const featureName = String(row.feature_name || "").trim();
+        keys.add([featureType, featureName, scopeKey, supportSince].join("||"));
+      }});
+      return keys.size;
+    }}
+    function buildUsageFilterText(row) {{
+      return ["feature_name", "collection", "op_type", "command_name", "oracle_category", "oracle_support_since", "oracle_support_status", "effective_complexity", "effective_migration_necessity", "recommended_action"]
+        .map((column) => String(row[column] || "")).join(" ").toLowerCase();
+    }}
+    function buildBaselineFilterText(row) {{
+      return ["feature_name", "feature_type", "oracle_section", "oracle_support_since", "oracle_support_statuses", "mongo_short_description", "effective_complexity", "effective_migration_necessity", "complexity_explanation", "observed_command_contexts"]
         .map((column) => String(row[column] || "")).join(" ").toLowerCase();
     }}
     function refreshStatusFilterOptions() {{
       const selected = selectedValues(statusFilter);
-      const availableStatuses = uniqueSorted(reportData.detailRows.map(withEffectiveStatus).map((row) => row.oracle_support_status || "Unknown"));
+      const baselineStatuses = reportData.baselineRows.flatMap((row) => String(row.oracle_support_statuses || "").split(",").map((item) => item.trim()).filter(Boolean));
+      const usageStatuses = reportData.detailRows.map(withEffectiveStatus).map((row) => row.oracle_support_status || "Unknown");
+      const availableStatuses = uniqueSorted([...baselineStatuses, ...usageStatuses]);
       populateSelect(statusFilter, availableStatuses, "选择支持判断", selected.filter((item) => availableStatuses.includes(item)));
     }}
-    function effectiveRows() {{
+    function effectiveUsageRows() {{
       return reportData.detailRows.map(withEffectiveStatus);
     }}
-    function filteredRows() {{
+    function filteredUsageRows() {{
       const filters = currentFilters();
-      return effectiveRows().filter((row) => {{
+      return effectiveUsageRows().filter((row) => {{
         if (filters.statuses.size && !filters.statuses.has(row.oracle_support_status || "")) return false;
         if (filters.opTypes.size && !filters.opTypes.has(String(row.op_type || ""))) return false;
         if (filters.featureTypes.size && !filters.featureTypes.has(String(row.feature_type || ""))) return false;
         if (filters.commands.size && !filters.commands.has(String(row.command_name || ""))) return false;
-        if (filters.keyword && !buildFilterText(row).includes(filters.keyword)) return false;
+        if (filters.complexities.size && !filters.complexities.has(String(row.effective_complexity || ""))) return false;
+        if (filters.scopes.size && !filters.scopes.has(String(row.effective_migration_necessity || row.effective_scope || ""))) return false;
+        if (filters.keyword && !buildUsageFilterText(row).includes(filters.keyword)) return false;
         return true;
       }});
     }}
-    function renderOverview(rows) {{
-      document.getElementById("metric-profile-count").textContent = String(reportData.metadata.profile_count || 0);
-      document.getElementById("metric-feature-count").textContent = String(rows.length);
-      document.getElementById("metric-supported").textContent = String(rows.filter((row) => row.oracle_support_status === "Supported").length);
-      document.getElementById("metric-not-supported").textContent = String(rows.filter((row) => row.oracle_support_status === "Not Supported").length);
-      document.getElementById("metric-unknown").textContent = String(rows.filter((row) => row.oracle_support_status === "Unknown").length);
+    function filteredBaselineRows() {{
+      const filters = currentFilters();
+      return reportData.baselineRows.filter((row) => {{
+        if (filters.featureTypes.size && !filters.featureTypes.has(String(row.feature_type || ""))) return false;
+        if (filters.complexities.size && !filters.complexities.has(String(row.effective_complexity || ""))) return false;
+        if (filters.scopes.size && !filters.scopes.has(String(row.effective_migration_necessity || row.effective_scope || ""))) return false;
+        if (filters.statuses.size) {{
+          const statuses = new Set(String(row.oracle_support_statuses || "").split(",").map((item) => item.trim()).filter(Boolean));
+          if (![...filters.statuses].some((status) => statuses.has(status))) return false;
+        }}
+        if (filters.commands.size) {{
+          const values = new Set(
+            [String(row.feature_name || ""), String(row.observed_command_contexts || "")]
+              .join(",")
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean)
+          );
+          if (![...filters.commands].some((command) => values.has(command))) return false;
+        }}
+        if (filters.keyword && !buildBaselineFilterText(row).includes(filters.keyword)) return false;
+        return true;
+      }});
+    }}
+    function isObservedBaselineRow(row) {{
+      return row.observed_in_profile === true || ["true", "1"].includes(String(row.observed_in_profile || "").toLowerCase());
+    }}
+    function isHotspotRow(row) {{
+      const complexity = String(row.effective_complexity || "");
+      const usageCount = Number(row.usage_count || 0);
+      return complexity === "High" || complexity === "Blocker" || (complexity === "Medium" && usageCount >= 20);
+    }}
+    function renderOverview(usageRows, baselineRows) {{
+      document.getElementById("metric-baseline-count").textContent = String(uniqueApiCount(baselineRows));
+      document.getElementById("metric-usage-count").textContent = String(uniqueApiCount(usageRows));
+      document.getElementById("metric-high-complexity").textContent = String(
+        uniqueApiCount(usageRows.filter((row) => ["High", "Blocker"].includes(String(row.effective_complexity || ""))))
+      );
+      document.getElementById("metric-hotspot-count").textContent = String(uniqueApiCount(usageRows.filter(isHotspotRow)));
+      document.getElementById("metric-observed-baseline").textContent = String(uniqueApiCount(baselineRows.filter(isObservedBaselineRow)));
       document.getElementById("usage-context-note").textContent = `当前支持判断基于所选组合: Oracle ${{currentOracleTargetVersion()}} + ${{currentOracleTargetMode()}}`;
     }}
-    function renderSummaries(rows) {{
-      const statusRows = aggregateCounts(rows, "oracle_support_status", "Unknown");
-      const commandRows = aggregateCounts(rows, "command_name", "Unknown").slice(0, 8);
-      renderStatusChart("status-chart", "支持状态汇总", statusRows, (item) => statusColorMap[item.label] || statusColorMap.Other);
-      renderDonutChart("command-chart", "命令使用汇总", commandRows, (_, index) => palette[index % palette.length]);
-      document.getElementById("status-table").innerHTML = createTable(
-        ["是否支持", "数量", "占比(%)"],
-        statusRows.map((item) => ({{ "是否支持": item.label, "数量": item.count, "占比(%)": `${{item.percentage}}%` }}))
-      );
-      document.getElementById("command-table").innerHTML = createTable(
-        ["command_name", "数量", "占比(%)"],
-        commandRows.map((item) => ({{ "command_name": item.label, "数量": item.count, "占比(%)": `${{item.percentage}}%` }}))
-      );
+    function renderBaseline(rows) {{
+      document.getElementById("metric-source-detail-count").textContent = String(reportData.sourceDetailRowCount || 0);
+      document.getElementById("metric-baseline-total").textContent = String(uniqueApiCount(rows));
+      document.getElementById("metric-baseline-observed").textContent = String(uniqueApiCount(rows.filter(isObservedBaselineRow)));
+      const coreColumns = [
+        "feature_type",
+        "feature_name",
+        "effective_migration_necessity",
+        "oracle_support_since",
+        "effective_complexity",
+        "complexity_explanation",
+        "override_complexity",
+        "override_reason",
+      ];
+      const advancedColumns = [
+        "oracle_section",
+        "oracle_support_statuses",
+        "mongo_short_description",
+        "observed_in_profile",
+        "observed_usage_count",
+        "observed_command_contexts",
+        "override_enabled",
+      ];
+      const columns = baselineAdvancedColumnsToggle.checked
+        ? [...coreColumns, ...advancedColumns]
+        : coreColumns;
+      document.getElementById("baseline-table").innerHTML = createTable(columns, rows);
     }}
-    function renderDetails(rows) {{
-      const columns = ["feature_type", "feature_name", "command_name", "op_type", "database", "collection", "usage_count", "first_seen", "last_seen", "max_duration_ms", "oracle_support_status", "oracle_support_since", "oracle_category"];
+    function renderUsage(rows) {{
+      document.getElementById("metric-workload-count").textContent = String(uniqueApiCount(rows));
+      document.getElementById("metric-workload-high").textContent = String(
+        uniqueApiCount(rows.filter((row) => ["High", "Blocker"].includes(String(row.effective_complexity || ""))))
+      );
+      document.getElementById("metric-workload-hotspots").textContent = String(uniqueApiCount(rows.filter(isHotspotRow)));
+      const columns = [
+        "feature_type",
+        "feature_name",
+        "command_name",
+        "database",
+        "collection",
+        "usage_count",
+        "max_duration_ms",
+        "oracle_support_status",
+        "effective_migration_necessity",
+        "effective_complexity",
+        "migration_priority",
+        "recommended_action",
+        "complexity_reason",
+      ];
       document.getElementById("usage-detail-table").innerHTML = createTable(columns, rows);
     }}
-    function renderRisk(rows) {{
-      const riskRows = rows
-        .filter((row) => ["Partially Supported", "Not Supported", "Unknown"].includes(row.oracle_support_status || ""))
-        .sort((left, right) => Number(right.usage_count || 0) - Number(left.usage_count || 0));
-      const columns = ["feature_type", "feature_name", "command_name", "op_type", "database", "collection", "usage_count", "oracle_support_status", "oracle_support_since", "oracle_category"];
-      document.getElementById("risk-table").innerHTML = createTable(columns, riskRows);
-      return riskRows;
-    }}
     function renderEvidence(rows) {{
-      const evidenceRows = rows
-        .filter((row) => row.oracle_support_status === "Not Supported")
-        .sort((left, right) => Number(right.usage_count || 0) - Number(left.usage_count || 0));
+      const evidenceRows = [...rows].sort((left, right) => Number(right.usage_count || 0) - Number(left.usage_count || 0));
       if (!evidenceRows.length) {{
-        evidenceSelect.innerHTML = `<option>当前筛选条件下没有 Not Supported 的证据样本</option>`;
-        document.getElementById("evidence-summary").textContent = "当前筛选条件下没有 Not Supported 的证据样本。";
+        evidenceSelect.innerHTML = `<option>当前筛选条件下没有可展示的证据样本</option>`;
+        document.getElementById("evidence-summary").textContent = "当前筛选条件下没有可展示的证据样本。";
         document.getElementById("evidence-sample-path").textContent = "";
         document.getElementById("evidence-sample-value").textContent = "暂无样本。";
         return;
       }}
       const previousValue = evidenceSelect.value;
       evidenceSelect.innerHTML = evidenceRows.map((row, index) => {{
-        const label = `${{row.feature_type}} | ${{row.feature_name}} | ${{row.collection || '-'}} | ${{row.oracle_support_status}}`;
+        const label = `${{row.feature_type}} | ${{row.feature_name}} | ${{row.command_name || '-'}} | ${{row.collection || '-'}}`;
         return `<option value="${{index}}">${{escapeHtml(label)}}</option>`;
       }}).join("");
       if (previousValue && Number(previousValue) < evidenceRows.length) evidenceSelect.value = previousValue;
@@ -3316,36 +3522,40 @@ def _build_usage_offline_report_html(
         <div>- oracle_support_status: ${{escapeHtml(selectedRow.oracle_support_status || "")}}</div>
         <div>- oracle_support_since: ${{escapeHtml(selectedRow.oracle_support_since || "-")}}</div>
         <div>- oracle_category: ${{escapeHtml(selectedRow.oracle_category || "-")}}</div>
+        <div>- effective_complexity: ${{escapeHtml(selectedRow.effective_complexity || "-")}}</div>
+        <div>- recommended_action: ${{escapeHtml(selectedRow.recommended_action || "-")}}</div>
       `;
-      document.getElementById("evidence-sample-path").innerHTML = `<strong>sample_path</strong>: <code>${{escapeHtml(selectedRow.sample_path || "")}}</code>`;
+      document.getElementById("evidence-sample-path").innerHTML = `<strong>命令中的位置</strong>: <code>${{escapeHtml(selectedRow.sample_path || "")}}</code>`;
       document.getElementById("evidence-sample-value").textContent = String(selectedRow.sample_value || "暂无样本。");
     }}
     function applyFilters() {{
-      const rows = filteredRows();
-      const effective = effectiveRows();
-      renderOverview(effective);
-      renderSummaries(effective);
-      renderDetails(rows);
-      renderRisk(rows);
-      renderEvidence(rows);
+      const usageRows = filteredUsageRows();
+      const baselineRows = filteredBaselineRows();
+      renderOverview(usageRows, baselineRows);
+      renderBaseline(baselineRows);
+      renderUsage(usageRows);
+      renderEvidence(usageRows);
     }}
     function init() {{
-      const oracleVersions = ["任意版本", ...availableOracleVersions()];
-      oracleVersionFilter.innerHTML = oracleVersions.map((value) => `<option value="${{escapeHtml(value)}}">${{escapeHtml(value)}}</option>`).join("");
-      oracleVersionFilter.value = reportData.oracleTargetVersion || "任意版本";
-      oracleModeFilter.value = reportData.oracleTargetMode || "任意部署方式";
-      populateSelect(statusFilter, uniqueSorted(reportData.detailRows.map((row) => row.oracle_support_status || "")), "选择支持判断", reportData.initialFilters.statuses || []);
+      oracleVersionFilter.innerHTML = `<option value="${{escapeHtml(reportData.oracleTargetVersion || "任意版本")}}">${{escapeHtml(reportData.oracleTargetVersion || "任意版本")}}</option>`;
+      oracleModeFilter.innerHTML = `<option value="${{escapeHtml(reportData.oracleTargetMode || "任意部署方式")}}">${{escapeHtml(reportData.oracleTargetMode || "任意部署方式")}}</option>`;
+      populateSelect(statusFilter, [], "选择支持判断", reportData.initialFilters.statuses || []);
       populateSelect(opFilter, uniqueSorted(reportData.detailRows.map((row) => row.op_type || "")), "选择 Profile op", reportData.initialFilters.opTypes || []);
       populateSelect(featureTypeFilter, uniqueSorted(reportData.detailRows.map((row) => row.feature_type || "")), "选择功能类型", reportData.initialFilters.featureTypes || []);
       populateSelect(commandFilter, uniqueSorted(reportData.detailRows.map((row) => row.command_name || "")), "选择命令", reportData.initialFilters.commands || []);
+      populateSelect(complexityFilter, uniqueSorted(reportData.detailRows.map((row) => row.effective_complexity || "")), "选择迁移复杂度", reportData.initialFilters.complexities || []);
+      populateSelect(scopeFilter, uniqueSorted([
+        ...reportData.detailRows.map((row) => row.effective_migration_necessity || row.effective_scope || ""),
+        ...reportData.baselineRows.map((row) => row.effective_migration_necessity || row.effective_scope || ""),
+      ]), "选择迁移必要性", reportData.initialFilters.scopes || []);
       keywordFilter.value = reportData.initialFilters.keyword || "";
+      baselineAdvancedColumnsToggle.checked = !!reportData.showBaselineAdvancedColumns;
       refreshStatusFilterOptions();
-      oracleVersionFilter.addEventListener("change", () => {{ refreshStatusFilterOptions(); applyFilters(); }});
-      oracleModeFilter.addEventListener("change", () => {{ refreshStatusFilterOptions(); applyFilters(); }});
       keywordFilter.addEventListener("input", applyFilters);
-      evidenceSelect.addEventListener("change", () => renderEvidence(filteredRows()));
+      baselineAdvancedColumnsToggle.addEventListener("change", applyFilters);
+      evidenceSelect.addEventListener("change", () => renderEvidence(filteredUsageRows()));
       document.addEventListener("click", (event) => {{
-        [statusFilter, opFilter, featureTypeFilter, commandFilter].forEach((container) => {{
+        [statusFilter, opFilter, featureTypeFilter, commandFilter, complexityFilter, scopeFilter].forEach((container) => {{
           if (!container.contains(event.target)) container.classList.remove("open");
         }});
       }});
@@ -3368,14 +3578,13 @@ def _latest_output_dir(output_root: str = "outputs", pattern: str = "feature_sup
     return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
 
 
-def _restore_last_result() -> bool:
-    latest_dir = _latest_output_dir(pattern="feature_support_*")
-    if latest_dir is None:
+def _restore_result_from_dir(cache_dir: Path) -> bool:
+    if cache_dir is None or not cache_dir.exists() or not cache_dir.is_dir():
         return False
 
-    detail_path = latest_dir / "feature_support_detail.csv"
-    summary_path = latest_dir / "feature_support_summary.csv"
-    metadata_path = latest_dir / "document_metadata.json"
+    detail_path = cache_dir / "feature_support_detail.csv"
+    summary_path = cache_dir / "feature_support_summary.csv"
+    metadata_path = cache_dir / "document_metadata.json"
     if not detail_path.exists() or not summary_path.exists():
         return False
 
@@ -3392,25 +3601,66 @@ def _restore_last_result() -> bool:
 
     st.session_state.result_detail_df = detail_df
     st.session_state.result_summary_df = summary_df
-    st.session_state.result_output_dir = str(latest_dir)
+    st.session_state.result_output_dir = str(cache_dir)
     st.session_state.doc_metadata = doc_metadata
     return True
 
 
-def _restore_last_usage_result() -> bool:
-    latest_dir = _latest_output_dir(pattern="mongodb_usage_*")
+def _restore_last_result() -> bool:
+    latest_dir = _latest_output_dir(pattern="feature_support_*")
     if latest_dir is None:
         return False
+    return _restore_result_from_dir(latest_dir)
 
-    detail_path = latest_dir / "mongodb_usage_feature_detail.csv"
-    summary_path = latest_dir / "mongodb_usage_feature_summary.csv"
-    metadata_path = latest_dir / "mongodb_usage_metadata.json"
+
+def _oracle_cache_label(cache_dir: Path, fallback_mongodb_manual_version: str = "") -> str:
+    metadata_path = cache_dir / "document_metadata.json"
+    mongodb_manual_version = ""
+    doc_version = ""
+    try:
+        if metadata_path.exists():
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            mongodb_manual_version = str(metadata.get("mongodb_manual_version", "") or "")
+            doc_version = str(metadata.get("doc_version_date", "") or "")
+    except Exception:  # noqa: BLE001
+        mongodb_manual_version = ""
+        doc_version = ""
+    mongodb_version_text = mongodb_manual_version or str(fallback_mongodb_manual_version or "").strip() or "未同步"
+    oracle_doc_text = doc_version or "未解析到"
+    return f"{cache_dir.name} | MongoDB {mongodb_version_text} | Oracle {oracle_doc_text}"
+
+
+def _restore_usage_result_from_dir(cache_dir: Path) -> bool:
+    if cache_dir is None or not cache_dir.exists() or not cache_dir.is_dir():
+        return False
+
+    detail_path = cache_dir / "mongodb_usage_feature_detail.csv"
+    summary_path = cache_dir / "mongodb_usage_feature_summary.csv"
+    metadata_path = cache_dir / "mongodb_usage_metadata.json"
+    migration_summary_path = cache_dir / "mongodb_migration_summary.csv"
+    hotspots_path = cache_dir / "mongodb_migration_hotspots.csv"
+    excluded_path = cache_dir / "mongodb_migration_excluded_commands.csv"
     if not detail_path.exists() or not summary_path.exists():
         return False
 
     try:
         detail_df = pd.read_csv(detail_path, encoding="utf-8-sig")
         summary_df = pd.read_csv(summary_path, encoding="utf-8-sig")
+        migration_summary_df = (
+            pd.read_csv(migration_summary_path, encoding="utf-8-sig")
+            if migration_summary_path.exists()
+            else None
+        )
+        hotspots_df = (
+            pd.read_csv(hotspots_path, encoding="utf-8-sig")
+            if hotspots_path.exists()
+            else None
+        )
+        excluded_df = (
+            pd.read_csv(excluded_path, encoding="utf-8-sig")
+            if excluded_path.exists()
+            else None
+        )
         usage_metadata = (
             json.loads(metadata_path.read_text(encoding="utf-8"))
             if metadata_path.exists()
@@ -3421,10 +3671,45 @@ def _restore_last_usage_result() -> bool:
 
     st.session_state.mongo_usage_detail_df = detail_df
     st.session_state.mongo_usage_summary_df = summary_df
-    st.session_state.mongo_usage_output_dir = str(latest_dir)
+    st.session_state.mongo_usage_output_dir = str(cache_dir)
     st.session_state.mongo_usage_metadata = usage_metadata
+    st.session_state.mongo_usage_migration_summary_df = migration_summary_df
+    st.session_state.mongo_usage_baseline_df = None
+    st.session_state.mongo_usage_hotspots_df = hotspots_df
+    st.session_state.mongo_usage_excluded_df = excluded_df
     st.session_state.mongo_usage_events_df = None
     return True
+
+
+def _restore_last_usage_result() -> bool:
+    latest_dir = _latest_output_dir(pattern="mongodb_usage_*")
+    if latest_dir is None:
+        return False
+    return _restore_usage_result_from_dir(latest_dir)
+
+
+def _usage_cache_label(cache_dir: Path) -> str:
+    metadata_path = cache_dir / "mongodb_usage_metadata.json"
+    database_name = ""
+    start_time = ""
+    end_time = ""
+    try:
+        if metadata_path.exists():
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            database_name = str(metadata.get("database_name", "") or "")
+            start_time = str(metadata.get("start_time", "") or "")
+            end_time = str(metadata.get("end_time", "") or "")
+    except Exception:  # noqa: BLE001
+        database_name = ""
+        start_time = ""
+        end_time = ""
+
+    timestamp = datetime.fromtimestamp(cache_dir.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    window_text = ""
+    if start_time or end_time:
+        window_text = f" | {start_time or '未设置'} ~ {end_time or '未设置'}"
+    db_text = f" | {database_name}" if database_name else ""
+    return f"{cache_dir.name} | {timestamp}{db_text}{window_text}"
 
 
 if (
@@ -3474,10 +3759,7 @@ if sync_reference:
         else:
             st.session_state.reference_df = sync_result.reference_df
             st.session_state.reference_metadata = sync_result.metadata
-            st.success(
-                "MongoDB 官方说明同步完成，"
-                f"共 {sync_result.metadata.get('entry_count', 0)} 条。"
-            )
+            st.success(f"MongoDB 官方说明已同步，共 {sync_result.metadata.get('entry_count', 0)} 条。")
 
 if submitted:
     _save_ui_settings()
@@ -3501,13 +3783,87 @@ if submitted:
             )
         except Exception as exc:  # noqa: BLE001
             st.error(f"执行失败: {exc}")
-            st.info("建议先把“请求超时（秒）”调到 90-120，再重试一次。")
+            st.info("建议先把“请求超时（秒）”调到 90 至 120，再重试。")
         else:
             st.session_state.result_detail_df = result.detail_df
             st.session_state.result_summary_df = result.summary_df
             st.session_state.result_output_dir = None
             st.session_state.doc_metadata = result.doc_metadata
-            st.success("Oracle 官方文档同步完成。")
+            st.success("Oracle 官方文档已同步。")
+
+with doc_left_panel:
+    oracle_cache_dirs = _list_output_dirs("feature_support_*")
+    oracle_cache_options = {
+        str(path): _oracle_cache_label(
+            path,
+            fallback_mongodb_manual_version=str(
+                (st.session_state.reference_metadata or {}).get("mongodb_manual_version", "") or ""
+            ),
+        )
+        for path in oracle_cache_dirs
+    }
+    with st.container(border=True):
+        header_cols = st.columns([1.0, 0.28], gap="small")
+        with header_cols[0]:
+            st.markdown('<div class="icon-toolbar-title" style="padding-top:0.35rem;">历史缓存</div>', unsafe_allow_html=True)
+        with header_cols[1]:
+            toolbar_cols = st.columns(2, gap="small")
+            with toolbar_cols[0]:
+                load_oracle_cache = st.button(
+                    "",
+                    key="load_oracle_cache",
+                    help="加载所选缓存",
+                    icon=":material/folder_open:",
+                    disabled=not oracle_cache_options,
+                    width="stretch",
+                )
+            with toolbar_cols[1]:
+                clear_oracle_caches = st.button(
+                    "",
+                    key="clear_oracle_caches",
+                    help="清理全部缓存",
+                    icon=":material/delete:",
+                    disabled=not oracle_cache_options,
+                    width="stretch",
+                )
+        if oracle_cache_options:
+            if st.session_state.oracle_selected_cache_dir not in oracle_cache_options:
+                st.session_state.oracle_selected_cache_dir = next(iter(oracle_cache_options))
+            selected_oracle_cache_dir = st.selectbox(
+                "选择缓存版本",
+                options=list(oracle_cache_options.keys()),
+                format_func=lambda value: oracle_cache_options.get(value, value),
+                key="oracle_selected_cache_dir",
+            )
+            if load_oracle_cache:
+                target_dir = Path(selected_oracle_cache_dir)
+                if _restore_result_from_dir(target_dir):
+                    st.session_state.restored_from_disk = True
+                    st.session_state.oracle_cache_save_notice = f"已加载本地缓存：{target_dir}"
+                    st.rerun()
+                st.error("加载所选缓存失败。")
+            if clear_oracle_caches and not st.session_state.confirm_clear_oracle_caches:
+                st.session_state.confirm_clear_oracle_caches = True
+                st.rerun()
+            if st.session_state.confirm_clear_oracle_caches:
+                st.warning("确认清理全部文档同步缓存？此操作会删除本地保存的所有 feature_support_* 目录。")
+                oracle_confirm_cols = st.columns(2, gap="medium")
+                with oracle_confirm_cols[0]:
+                    if st.button("确认清理", key="confirm_clear_oracle_caches_btn", width="stretch"):
+                        removed_count = _clear_output_dirs("feature_support_*")
+                        st.session_state.pop("oracle_selected_cache_dir", None)
+                        st.session_state.confirm_clear_oracle_caches = False
+                        st.session_state.oracle_cache_save_notice = f"已清理文档同步缓存，共删除 {removed_count} 个目录。"
+                        if st.session_state.result_output_dir and not Path(str(st.session_state.result_output_dir)).exists():
+                            st.session_state.result_output_dir = None
+                            st.session_state.restored_from_disk = False
+                        st.rerun()
+                with oracle_confirm_cols[1]:
+                    if st.button("取消", key="cancel_clear_oracle_caches_btn", width="stretch"):
+                        st.session_state.confirm_clear_oracle_caches = False
+                        st.rerun()
+        else:
+            st.caption("暂无可用缓存。")
 
 with usage_tab:
     usage_left_col, usage_right_col = st.columns([1.0, 2.15], gap="large")
@@ -3518,9 +3874,9 @@ with usage_tab:
 
 with usage_left_panel:
     with st.container(border=True):
-        st.markdown("#### MongoDB Usage Analysis")
+        st.markdown("#### MongoDB Usage 分析")
         if st.session_state.result_detail_df is None:
-            st.info("先执行一次“同步 Oracle 官方文档”，再进行 MongoDB Usage 对比分析。")
+            st.info("请先同步 Oracle 官方文档，再进行 Usage 分析。")
 
         def emit_mongo_trace(message: str) -> None:
             st.session_state.mongo_usage_trace_logs.append(message)
@@ -3530,24 +3886,16 @@ with usage_left_panel:
                 "MongoDB URI",
                 key="mongo_usage_uri",
                 type="password",
-                placeholder="mongodb://user:password@host:27017/?authSource=admin",
+                placeholder="mongodb://user:password@host:27017/oracle_mongo_api_test?authSource=admin",
             )
-            mongo_cols = st.columns(2, gap="medium")
-            with mongo_cols[0]:
-                mongodb_database = st.text_input(
-                    "数据库名（可选）",
-                    key="mongo_usage_database",
-                    placeholder="留空时优先使用 URI 中的默认数据库",
-                )
-            with mongo_cols[1]:
-                mongo_sample_limit = st.number_input(
-                    "最大采样条数",
-                    min_value=100,
-                    max_value=200000,
-                    step=100,
-                    value=20000,
-                    key="mongo_usage_sample_limit",
-                )
+            mongo_sample_limit = st.number_input(
+                "最大采样条数",
+                min_value=100,
+                max_value=200000,
+                step=100,
+                value=20000,
+                key="mongo_usage_sample_limit",
+            )
 
             time_cols = st.columns(2, gap="medium")
             with time_cols[0]:
@@ -3564,18 +3912,21 @@ with usage_left_panel:
                 )
 
             mongo_usage_trace_enabled = st.checkbox(
-                "显示 trace 信息",
+                "显示日志",
                 key="mongo_usage_trace_enabled",
             )
-            test_usage_connection = st.form_submit_button(
-                "测试 MongoDB 连接",
-                width="stretch",
-            )
-            analyze_usage = st.form_submit_button(
-                "读取 system.profile 并分析",
-                type="primary",
-                width="stretch",
-            )
+            action_cols = st.columns(2, gap="medium")
+            with action_cols[0]:
+                test_usage_connection = st.form_submit_button(
+                    "测试连接",
+                    width="stretch",
+                )
+            with action_cols[1]:
+                analyze_usage = st.form_submit_button(
+                    "分析 system.profile",
+                    type="primary",
+                    width="stretch",
+                )
 
         if test_usage_connection or analyze_usage:
             st.session_state.mongo_usage_trace_logs = []
@@ -3584,16 +3935,19 @@ with usage_left_panel:
                 st.error("请填写 MongoDB URI。")
             else:
                 try:
-                    start_time = _parse_optional_datetime(mongo_start_time)
-                    end_time = _parse_optional_datetime(mongo_end_time)
                     effective_database_name = _resolve_mongodb_database_name(
                         str(mongodb_uri).strip(),
-                        str(mongodb_database).strip(),
+                        "",
                     )
                     if not effective_database_name:
-                        raise ValueError("请填写数据库名，或在 MongoDB URI 中提供默认数据库。")
-                    if start_time and end_time and start_time > end_time:
-                        raise ValueError("开始时间不能晚于结束时间。")
+                        raise ValueError("MongoDB URI 中必须包含默认数据库，例如 /oracle_mongo_api_test。")
+                    start_time = None
+                    end_time = None
+                    if test_usage_connection or analyze_usage:
+                        start_time = _parse_optional_datetime(mongo_start_time)
+                        end_time = _parse_optional_datetime(mongo_end_time)
+                        if start_time and end_time and start_time > end_time:
+                            raise ValueError("开始时间不能晚于结束时间。")
                 except ValueError as exc:
                     st.error(str(exc))
                 else:
@@ -3607,22 +3961,19 @@ with usage_left_panel:
                                 )
                             except Exception as exc:  # noqa: BLE001
                                 st.session_state.mongo_usage_connection_test = {}
-                                st.error(f"MongoDB 连接测试失败: {exc}")
+                                st.error(f"连接测试失败：{exc}")
                             else:
-                                st.session_state.mongo_usage_connection_test = {
-                                    "fetched_at": test_result.fetched_at,
-                                    "database_name": test_result.database_name,
-                                    "has_system_profile": test_result.has_system_profile,
-                                    "collection_count": test_result.collection_count,
-                                    "sample_collections": test_result.sample_collections,
-                                }
                                 if test_result.has_system_profile:
-                                    st.success("MongoDB 连接测试成功，且已检测到 system.profile。")
+                                    st.success(
+                                        f"连接成功，当前数据库为 `{test_result.database_name}`，已检测到 system.profile。"
+                                    )
                                 else:
-                                    st.warning("MongoDB 连接测试成功，但未检测到 system.profile。请确认目标库已开启 profiler。")
+                                    st.warning(
+                                        f"连接成功，当前数据库为 `{test_result.database_name}`，但未检测到 system.profile。请确认目标库已开启 profiler。"
+                                    )
                     elif analyze_usage:
                         if st.session_state.result_detail_df is None:
-                            st.error("当前还没有 Oracle Feature Support 明细，请先同步 Oracle 官方文档。")
+                            st.error("当前没有 Oracle Feature Support 明细，请先同步 Oracle 官方文档。")
                         else:
                             with st.spinner("正在读取 system.profile 并生成使用报表，请稍候..."):
                                 try:
@@ -3652,8 +4003,20 @@ with usage_left_panel:
                                         st.session_state.result_detail_df,
                                     )
                                     if mongo_usage_trace_enabled:
+                                        emit_mongo_trace("[USAGE] Load migration complexity rules")
+                                    ruleset = load_migration_rules()
+                                    if mongo_usage_trace_enabled:
+                                        emit_mongo_trace(
+                                            f"[USAGE] Apply migration assessment rules version={ruleset.rules_version or 'unknown'}"
+                                        )
+                                    migration_result = assess_migration_complexity(
+                                        mapped_df,
+                                        ruleset,
+                                    )
+                                    assessed_df = migration_result.detail_df
+                                    if mongo_usage_trace_enabled:
                                         emit_mongo_trace("[USAGE] Build usage summary")
-                                    summary_df = build_usage_summary(mapped_df)
+                                    summary_df = build_usage_summary(assessed_df)
                                     metadata = {
                                         "database_name": effective_database_name,
                                         "fetched_at": profile_result.fetched_at,
@@ -3661,43 +4024,287 @@ with usage_left_panel:
                                         "end_time": end_time.isoformat() if end_time else "",
                                         "profile_count": len(profile_result.records),
                                         "truncated": profile_result.truncated,
+                                        "rules_version": migration_result.rules_version,
+                                        "override_count": migration_result.override_count,
+                                        "rules_coverage_rate": migration_result.rules_coverage_rate,
+                                        "unclassified_feature_count": migration_result.unclassified_feature_count,
                                     }
                                 except Exception as exc:  # noqa: BLE001
-                                    st.error(f"MongoDB Usage 分析失败: {exc}")
+                                    st.error(f"Usage 分析失败：{exc}")
                                 else:
                                     st.session_state.mongo_usage_cache_save_notice = ""
                                     st.session_state.mongo_usage_restored_from_disk = False
-                                    st.session_state.mongo_usage_detail_df = mapped_df
+                                    st.session_state.mongo_usage_detail_df = assessed_df
                                     st.session_state.mongo_usage_summary_df = summary_df
+                                    st.session_state.mongo_usage_migration_summary_df = migration_result.summary_df
+                                    st.session_state.mongo_usage_baseline_df = migration_result.baseline_df
+                                    st.session_state.mongo_usage_hotspots_df = migration_result.hotspots_df
+                                    st.session_state.mongo_usage_excluded_df = migration_result.excluded_df
                                     st.session_state.mongo_usage_events_df = events_df
                                     st.session_state.mongo_usage_output_dir = None
                                     st.session_state.mongo_usage_metadata = metadata
-                                    st.success("MongoDB Usage 分析完成。")
+                                    st.session_state.mongo_usage_override_save_notice = ""
+                                    st.success("Usage 分析完成。")
 
-        if st.session_state.mongo_usage_connection_test:
-            connection_test = st.session_state.mongo_usage_connection_test
-            with st.container(border=True):
-                st.subheader("MongoDB 连接测试结果")
-                test_row_1 = st.columns(2, gap="medium")
-                with test_row_1[0]:
-                    st.metric("数据库", str(connection_test.get("database_name", "")))
-                with test_row_1[1]:
-                    st.metric("集合数", int(connection_test.get("collection_count", 0)))
-                test_row_2 = st.columns(2, gap="medium")
-                with test_row_2[0]:
-                    st.metric(
-                        "system.profile",
-                        "已检测到" if connection_test.get("has_system_profile") else "未检测到",
+        usage_cache_dirs = _list_output_dirs("mongodb_usage_*")
+        cache_options = {str(path): _usage_cache_label(path) for path in usage_cache_dirs}
+        with st.container(border=True):
+            header_cols = st.columns([1.0, 0.28], gap="small")
+            with header_cols[0]:
+                st.markdown('<div class="icon-toolbar-title" style="padding-top:0.35rem;">历史缓存</div>', unsafe_allow_html=True)
+            with header_cols[1]:
+                toolbar_cols = st.columns(2, gap="small")
+                with toolbar_cols[0]:
+                    load_usage_cache = st.button(
+                        "",
+                        key="load_usage_cache",
+                        help="加载所选缓存",
+                        icon=":material/folder_open:",
+                        disabled=not cache_options,
+                        width="stretch",
                     )
-                with test_row_2[1]:
-                    st.metric("测试时间", str(connection_test.get("fetched_at", "")))
-                sample_collections = connection_test.get("sample_collections", [])
-                if sample_collections:
-                    st.caption("集合样本: " + ", ".join(str(item) for item in sample_collections))
+                with toolbar_cols[1]:
+                    clear_usage_caches = st.button(
+                        "",
+                        key="clear_usage_caches",
+                        help="清理全部缓存",
+                        icon=":material/delete:",
+                        disabled=not cache_options,
+                        width="stretch",
+                    )
+            if cache_options:
+                if st.session_state.mongo_usage_selected_cache_dir not in cache_options:
+                    st.session_state.mongo_usage_selected_cache_dir = next(iter(cache_options))
+                selected_cache_dir = st.selectbox(
+                    "选择缓存版本",
+                    options=list(cache_options.keys()),
+                    format_func=lambda value: cache_options.get(value, value),
+                    key="mongo_usage_selected_cache_dir",
+                )
+                if load_usage_cache:
+                    target_dir = Path(selected_cache_dir)
+                    if _restore_usage_result_from_dir(target_dir):
+                        st.session_state.mongo_usage_restored_from_disk = True
+                        st.session_state.mongo_usage_cache_save_notice = f"已加载本地缓存：{target_dir}"
+                        st.session_state.mongo_usage_connection_test = {}
+                        st.rerun()
+                    st.error("加载所选缓存失败。")
+                if clear_usage_caches and not st.session_state.confirm_clear_usage_caches:
+                    st.session_state.confirm_clear_usage_caches = True
+                    st.rerun()
+                if st.session_state.confirm_clear_usage_caches:
+                    st.warning("确认清理全部 MongoDB Usage 缓存？此操作会删除本地保存的所有 mongodb_usage_* 目录。")
+                    usage_confirm_cols = st.columns(2, gap="medium")
+                    with usage_confirm_cols[0]:
+                        if st.button("确认清理", key="confirm_clear_usage_caches_btn", width="stretch"):
+                            removed_count = _clear_output_dirs("mongodb_usage_*")
+                            st.session_state.pop("mongo_usage_selected_cache_dir", None)
+                            st.session_state.confirm_clear_usage_caches = False
+                            st.session_state.mongo_usage_cache_save_notice = f"已清理 MongoDB Usage 缓存，共删除 {removed_count} 个目录。"
+                            if st.session_state.mongo_usage_output_dir and not Path(str(st.session_state.mongo_usage_output_dir)).exists():
+                                st.session_state.mongo_usage_output_dir = None
+                                st.session_state.mongo_usage_restored_from_disk = False
+                            st.rerun()
+                    with usage_confirm_cols[1]:
+                        if st.button("取消", key="cancel_clear_usage_caches_btn", width="stretch"):
+                            st.session_state.confirm_clear_usage_caches = False
+                            st.rerun()
+            else:
+                st.caption("暂无可用缓存。")
 
         if st.session_state.mongo_usage_trace_logs and st.session_state.get("mongo_usage_trace_enabled", False):
-            with st.expander("▸ MongoDB Usage Trace", expanded=True):
+            with st.expander("▸ Usage 日志", expanded=True):
                 st.code("\n".join(st.session_state.mongo_usage_trace_logs[-300:]), language="text")
+
+with testkit_tab:
+    testkit_left_col, testkit_right_col = st.columns([1.0, 2.15], gap="large")
+    with testkit_left_col:
+        testkit_left_panel = st.container(height=WORKSPACE_PANEL_HEIGHT, border=False)
+    with testkit_right_col:
+        testkit_right_panel = st.container(height=WORKSPACE_PANEL_HEIGHT, border=False)
+
+with testkit_left_panel:
+    with st.container(border=True):
+        st.markdown("#### MongoDB 测试工具")
+        st.warning("该区域会写入、覆盖集合，并临时调整 profiler。请仅连接测试库。")
+
+        def emit_testkit_trace(message: str) -> None:
+            st.session_state.mongo_testkit_trace_logs.append(message)
+
+        with st.form("mongo_testkit_form", clear_on_submit=False):
+            testkit_uri = st.text_input(
+                "MongoDB URI",
+                key="mongo_testkit_uri",
+                type="password",
+                placeholder="mongodb://user:password@host:27017/oracle_mongo_api_test?authSource=admin",
+            )
+            mongo_testkit_trace_enabled = st.checkbox(
+                "显示日志",
+                key="mongo_testkit_trace_enabled",
+            )
+            mongo_testkit_confirm = st.checkbox(
+                "我确认当前连接的是测试库，允许应用写入和覆盖测试数据",
+                key="mongo_testkit_confirm",
+                help="初始化测试数据会重建 customers/orders/inventory/order_metrics/order_archive；运行测试查询会写入测试数据并临时调整 profiler。",
+            )
+            testkit_action_cols = st.columns(3, gap="medium")
+            with testkit_action_cols[0]:
+                test_testkit_connection = st.form_submit_button("测试连接", width="stretch")
+            with testkit_action_cols[1]:
+                init_testkit_data = st.form_submit_button("初始化测试数据", width="stretch")
+            with testkit_action_cols[2]:
+                run_testkit_queries = st.form_submit_button("运行测试查询", width="stretch")
+
+        if test_testkit_connection or init_testkit_data or run_testkit_queries:
+            st.session_state.mongo_testkit_trace_logs = []
+            _save_ui_settings()
+            if not str(testkit_uri).strip():
+                st.error("请填写 MongoDB URI。")
+            else:
+                try:
+                    effective_testkit_database = _resolve_mongodb_database_name(
+                        str(testkit_uri).strip(),
+                        "",
+                    )
+                    if not effective_testkit_database:
+                        raise ValueError("MongoDB URI 中必须包含默认数据库，例如 /oracle_mongo_api_test。")
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    if test_testkit_connection:
+                        with st.spinner("正在测试 MongoDB 连接，请稍候..."):
+                            try:
+                                test_result = test_mongodb_connection(
+                                    mongodb_uri=str(testkit_uri).strip(),
+                                    database_name=effective_testkit_database,
+                                    progress_callback=emit_testkit_trace if mongo_testkit_trace_enabled else None,
+                                )
+                            except Exception as exc:  # noqa: BLE001
+                                st.session_state.mongo_testkit_connection_test = {}
+                                st.error(f"连接测试失败：{exc}")
+                            else:
+                                if test_result.has_system_profile:
+                                    st.success(
+                                        f"连接成功，当前数据库为 `{test_result.database_name}`，已检测到 system.profile。"
+                                    )
+                                else:
+                                    st.warning(
+                                        f"连接成功，当前数据库为 `{test_result.database_name}`，但未检测到 system.profile。"
+                                    )
+                    elif init_testkit_data:
+                        if not mongo_testkit_confirm:
+                            st.error("请先勾选测试库确认项，再执行初始化测试数据。")
+                        else:
+                            with st.spinner("正在初始化测试数据，请稍候..."):
+                                try:
+                                    seed_result = seed_test_data(
+                                        mongodb_uri=str(testkit_uri).strip(),
+                                        database_name=effective_testkit_database,
+                                        progress_callback=emit_testkit_trace if mongo_testkit_trace_enabled else None,
+                                    )
+                                except Exception as exc:  # noqa: BLE001
+                                    st.error(f"初始化测试数据失败：{exc}")
+                                else:
+                                    st.session_state.mongo_testkit_seed_result = {
+                                        "database_name": seed_result.database_name,
+                                        "finished_at": seed_result.finished_at,
+                                        "dropped_collections": seed_result.dropped_collections,
+                                        "inserted_counts": seed_result.inserted_counts,
+                                        "created_indexes": seed_result.created_indexes,
+                                    }
+                                    st.success("测试数据初始化完成。")
+                    elif run_testkit_queries:
+                        if not mongo_testkit_confirm:
+                            st.error("请先勾选测试库确认项，再执行测试查询。")
+                        else:
+                            with st.spinner("正在执行测试查询，请稍候..."):
+                                try:
+                                    exercise_result = run_profile_exercises(
+                                        mongodb_uri=str(testkit_uri).strip(),
+                                        database_name=effective_testkit_database,
+                                        progress_callback=emit_testkit_trace if mongo_testkit_trace_enabled else None,
+                                    )
+                                except Exception as exc:  # noqa: BLE001
+                                    st.error(f"执行测试查询失败：{exc}")
+                                else:
+                                    st.session_state.mongo_testkit_exercise_result = {
+                                        "database_name": exercise_result.database_name,
+                                        "finished_at": exercise_result.finished_at,
+                                        "command_count": exercise_result.command_count,
+                                        "original_profile_level": exercise_result.original_profile_level,
+                                        "restored_profile_level": exercise_result.restored_profile_level,
+                                        "profile_count_before": exercise_result.profile_count_before,
+                                        "profile_count_after": exercise_result.profile_count_after,
+                                        "unsupported_feature_names": exercise_result.unsupported_feature_names,
+                                    }
+                                    st.success("测试查询执行完成。")
+
+        if st.session_state.mongo_testkit_seed_result:
+            seed_result = st.session_state.mongo_testkit_seed_result
+            with st.container(border=True):
+                st.markdown('<div class="panel-subsection-title">测试数据初始化结果</div>', unsafe_allow_html=True)
+                seed_cols = st.columns(3, gap="medium")
+                with seed_cols[0]:
+                    st.metric("数据库", str(seed_result.get("database_name", "")))
+                with seed_cols[1]:
+                    inserted_total = sum(int(value or 0) for value in dict(seed_result.get("inserted_counts", {})).values())
+                    st.metric("写入文档数", inserted_total)
+                with seed_cols[2]:
+                    st.metric("完成时间", str(seed_result.get("finished_at", "")))
+                dropped_collections = seed_result.get("dropped_collections", [])
+                if dropped_collections:
+                    st.caption("重建集合: " + ", ".join(str(item) for item in dropped_collections))
+                created_indexes = seed_result.get("created_indexes", {})
+                if created_indexes:
+                    index_parts: list[str] = []
+                    for collection_name, index_names in dict(created_indexes).items():
+                        if index_names:
+                            index_parts.append(f"{collection_name}: {', '.join(str(name) for name in index_names)}")
+                    if index_parts:
+                        st.caption("索引: " + " | ".join(index_parts))
+
+        if st.session_state.mongo_testkit_exercise_result:
+            exercise_result = st.session_state.mongo_testkit_exercise_result
+            with st.container(border=True):
+                st.markdown('<div class="panel-subsection-title">测试查询执行结果</div>', unsafe_allow_html=True)
+                exercise_cols = st.columns(4, gap="medium")
+                with exercise_cols[0]:
+                    st.metric("数据库", str(exercise_result.get("database_name", "")))
+                with exercise_cols[1]:
+                    st.metric("执行命令数", int(exercise_result.get("command_count", 0)))
+                with exercise_cols[2]:
+                    profile_delta = int(exercise_result.get("profile_count_after", 0)) - int(exercise_result.get("profile_count_before", 0))
+                    st.metric("新增 profile 条数", profile_delta)
+                with exercise_cols[3]:
+                    st.metric("完成时间", str(exercise_result.get("finished_at", "")))
+                st.caption(
+                    "Profiler 恢复: "
+                    + f"{exercise_result.get('original_profile_level', 0)} -> "
+                    + f"{exercise_result.get('restored_profile_level', 0)}"
+                )
+                unsupported_feature_names = exercise_result.get("unsupported_feature_names", [])
+                if unsupported_feature_names:
+                    st.caption("预置的 Oracle 明确不支持样本: " + ", ".join(str(item) for item in unsupported_feature_names))
+
+        if st.session_state.mongo_testkit_trace_logs and st.session_state.get("mongo_testkit_trace_enabled", False):
+            with st.expander("▸ 测试工具日志", expanded=True):
+                st.code("\n".join(st.session_state.mongo_testkit_trace_logs[-300:]), language="text")
+
+with testkit_right_panel:
+    with st.container(border=True):
+        st.markdown("#### 使用说明")
+        st.markdown(
+            "\n".join(
+                [
+                    "- 该页只用于测试库准备，不用于迁移评估。",
+                    "- 初始化集合：`customers`、`orders`、`inventory`、`order_metrics`、`order_archive`。",
+                    "- 查询覆盖：`find`、`aggregate`、`update`、`delete`、`findAndModify`、`distinct`、`count`、`listIndexes`、`createIndexes`、`dropIndexes`。",
+                    "- 不支持样本：`$expr`、`$bucketAuto`、`$graphLookup`、`$regexMatch`、`$setField`。",
+                    "- `运行测试查询` 会临时把 profiler 调整为 level 2，执行完成后恢复。",
+                    "- 建议先初始化测试数据，再运行测试查询，最后回到 `MongoDB Usage 分析` 页执行迁移评估。",
+                ]
+            )
+        )
 
 with doc_right_panel:
     if st.session_state.get("show_debug_log_runtime", True) and st.session_state.debug_logs:
@@ -3949,31 +4556,36 @@ with doc_right_panel:
             last_refresh_time = datetime.fromtimestamp(Path(output_dir).stat().st_mtime).strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
-            st.caption(f"上次刷新时间: {last_refresh_time}")
+            st.caption(f"上次刷新：{last_refresh_time}")
         elif st.session_state.oracle_cache_save_notice:
             st.caption(st.session_state.oracle_cache_save_notice)
         else:
-            st.caption("当前 Oracle 分析结果尚未保存到本地缓存。")
+            st.caption("当前结果尚未写入本地缓存。")
 
         download_cols = st.columns([0.65, 0.65, 0.65, 3.05], gap="medium")
         with download_cols[0]:
             if st.button(
                 "",
                 key="save_oracle_cache",
-                help="保存当前 Oracle 分析结果到本地缓存",
+                help="保存当前结果到本地缓存",
                 icon=":material/save:",
                 width="stretch",
             ):
                 saved_dir = _persist_oracle_cache(
                     detail_df=st.session_state.result_detail_df,
                     summary_df=st.session_state.result_summary_df,
-                    doc_metadata=doc_metadata,
+                    doc_metadata={
+                        **doc_metadata,
+                        "mongodb_manual_version": str(
+                            reference_metadata.get("mongodb_manual_version", "") or ""
+                        ),
+                    },
                     report_html=offline_report_html,
                     workbook_bytes=oracle_workbook_bytes,
                 )
                 st.session_state.result_output_dir = str(saved_dir)
                 st.session_state.restored_from_disk = False
-                st.session_state.oracle_cache_save_notice = f"已保存 Oracle 本地缓存: {saved_dir}"
+                st.session_state.oracle_cache_save_notice = f"已保存本地缓存：{saved_dir}"
                 st.rerun()
         with download_cols[1]:
             st.download_button(
@@ -4025,7 +4637,7 @@ with doc_right_panel:
                 support_combo_label = (
                     f"Oracle {selected_oracle_target_version} + {support_mode_label}"
                 )
-                st.caption(f"当前 API 支持汇总基于组合: {support_combo_label}")
+                st.caption(f"当前支持判断：{support_combo_label}")
                 support_status_tab, support_evolution_tab = st.tabs(
                     ["状态汇总", "模式与版本演进"]
                 )
@@ -4225,12 +4837,12 @@ with doc_right_panel:
             st.markdown('<div id="feature-support-detail" class="panel-anchor"></div>', unsafe_allow_html=True)
             detail_header_cols = st.columns([9.2, 0.8], gap="small", vertical_alignment="center")
             with detail_header_cols[0]:
-                st.markdown('<div class="panel-section-title">Feature Support 明细分析</div>', unsafe_allow_html=True)
+                st.markdown('<div class="panel-section-title">Feature Support 明细</div>', unsafe_allow_html=True)
             with detail_header_cols[1]:
                 if st.button(
                     "",
                     key="toggle_feature_detail",
-                    help="展开或收起 Feature Support 明细分析",
+                    help="展开或收起 Feature Support 明细",
                     icon=":material/expand_more:" if st.session_state.feature_detail_expanded else ":material/chevron_right:",
                     width="stretch",
                 ):
@@ -4240,7 +4852,7 @@ with doc_right_panel:
             if st.session_state.feature_detail_expanded:
                 feature_detail_mode_label = _oracle_target_mode_label(selected_oracle_target_mode)
                 st.caption(
-                    f"当前支持判断基于所选组合: Oracle {selected_oracle_target_version} + {feature_detail_mode_label}"
+                    f"当前支持判断：Oracle {selected_oracle_target_version} + {feature_detail_mode_label}"
                 )
                 detail_filter_row = st.columns([1.15, 1.0, 0.9], gap="medium")
                 with detail_filter_row[0]:
@@ -4345,6 +4957,26 @@ with doc_right_panel:
 with usage_right_panel:
     if st.session_state.mongo_usage_detail_df is not None:
         usage_detail_df = st.session_state.mongo_usage_detail_df.copy()
+        migration_summary_df = (
+            st.session_state.mongo_usage_migration_summary_df.copy()
+            if st.session_state.mongo_usage_migration_summary_df is not None
+            else pd.DataFrame()
+        )
+        baseline_df = (
+            st.session_state.mongo_usage_baseline_df.copy()
+            if st.session_state.mongo_usage_baseline_df is not None
+            else pd.DataFrame()
+        )
+        hotspots_df = (
+            st.session_state.mongo_usage_hotspots_df.copy()
+            if st.session_state.mongo_usage_hotspots_df is not None
+            else pd.DataFrame()
+        )
+        excluded_df = (
+            st.session_state.mongo_usage_excluded_df.copy()
+            if st.session_state.mongo_usage_excluded_df is not None
+            else pd.DataFrame()
+        )
         usage_oracle_version_options = _available_oracle_versions(
             usage_detail_df["oracle_support_since"].fillna("").astype(str).tolist()
             if "oracle_support_since" in usage_detail_df.columns
@@ -4362,13 +4994,168 @@ with usage_right_panel:
                     usage_target_mode,
                 )
             )
+        current_ruleset = load_migration_rules()
+        reassessed_result = assess_migration_complexity(
+            usage_detail_df,
+            current_ruleset,
+        )
+        usage_detail_df = reassessed_result.detail_df
+        migration_summary_df = reassessed_result.summary_df
+        hotspots_df = reassessed_result.hotspots_df
+        excluded_df = reassessed_result.excluded_df
         usage_summary_df = build_usage_summary(usage_detail_df)
+        oracle_catalog_detail_df = (
+            st.session_state.result_detail_df.copy()
+            if st.session_state.result_detail_df is not None
+            else pd.DataFrame()
+        )
+        if not oracle_catalog_detail_df.empty and not st.session_state.reference_df.empty:
+            oracle_catalog_detail_df = enrich_feature_support_detail(
+                oracle_catalog_detail_df,
+                st.session_state.reference_df,
+            )
+        if not oracle_catalog_detail_df.empty and "Support (Since)" in oracle_catalog_detail_df.columns:
+            oracle_catalog_detail_df = oracle_catalog_detail_df.copy()
+            oracle_catalog_detail_df["normalized_status"] = oracle_catalog_detail_df["Support (Since)"].map(
+                lambda value: _effective_oracle_support_status(
+                    value,
+                    usage_target_version,
+                    usage_target_mode,
+                )
+            )
+        catalog_usage_df = _build_catalog_usage_df(oracle_catalog_detail_df)
+        catalog_baseline_result = assess_migration_complexity(
+            catalog_usage_df,
+            current_ruleset,
+        )
+        baseline_df = catalog_baseline_result.baseline_df
+        if not baseline_df.empty:
+            description_lookup = (
+                oracle_catalog_detail_df.assign(
+                    baseline_feature_type=lambda df: df.apply(
+                        lambda item: "command"
+                        if _safe_feature_text(item.get("Command", ""))
+                        else (
+                            "stage"
+                            if _safe_feature_text(item.get("Stage", ""))
+                            else (
+                                "operator"
+                                if _safe_feature_text(item.get("Operator", ""))
+                                else ""
+                            )
+                        ),
+                        axis=1,
+                    ),
+                    baseline_feature_name=lambda df: df.apply(
+                        lambda item: _safe_feature_text(item.get("Command", ""))
+                        or _safe_feature_text(item.get("Stage", ""))
+                        or _safe_feature_text(item.get("Operator", "")),
+                        axis=1,
+                    ),
+                    baseline_feature_section=lambda df: df["section"].fillna("").astype(str),
+                    baseline_feature_support_since=lambda df: df["Support (Since)"].fillna("").astype(str),
+                )
+            )
+            description_lookup = description_lookup[
+                description_lookup["baseline_feature_type"].astype(str).str.strip().ne("")
+                & description_lookup["baseline_feature_name"].astype(str).str.strip().ne("")
+            ][
+                [
+                    "baseline_feature_type",
+                    "baseline_feature_name",
+                    "baseline_feature_section",
+                    "baseline_feature_support_since",
+                    "mongo_short_description",
+                    "section",
+                    "Support (Since)",
+                ]
+            ].drop_duplicates(
+                subset=[
+                    "baseline_feature_type",
+                    "baseline_feature_name",
+                    "baseline_feature_section",
+                    "baseline_feature_support_since",
+                ],
+                keep="first",
+            )
+            baseline_df = baseline_df.merge(
+                description_lookup.rename(
+                    columns={
+                        "baseline_feature_type": "feature_type",
+                        "baseline_feature_name": "feature_name",
+                        "baseline_feature_section": "oracle_section",
+                        "baseline_feature_support_since": "oracle_support_since",
+                        "mongo_short_description": "mongo_short_description",
+                    }
+                ),
+                on=["feature_type", "feature_name", "oracle_section", "oracle_support_since"],
+                how="left",
+            )
+            observed_lookup = (
+                usage_detail_df.groupby(["feature_type", "feature_name"], dropna=False, as_index=False)
+                .agg(
+                    observed_usage_count=("usage_count", "sum"),
+                    observed_command_contexts=(
+                        "command_name",
+                        lambda values: ", ".join(
+                            sorted({str(value) for value in values if str(value).strip()})
+                        ),
+                    ),
+                )
+            )
+            baseline_df = baseline_df.merge(
+                observed_lookup,
+                on=["feature_type", "feature_name"],
+                how="left",
+            )
+            baseline_df["observed_usage_count"] = pd.to_numeric(
+                baseline_df["observed_usage_count"],
+                errors="coerce",
+            ).fillna(0).astype(int)
+            baseline_df["observed_in_profile"] = baseline_df["observed_usage_count"].gt(0)
+        if not baseline_df.empty and not current_ruleset.override_df.empty:
+            baseline_df = baseline_df.merge(
+                current_ruleset.override_df.rename(
+                    columns={
+                        "enabled": "override_enabled",
+                    }
+                ),
+                on=["feature_type", "feature_name"],
+                how="left",
+                suffixes=("", "_loaded"),
+            )
+            for target_col, source_col in [
+                ("override_scope", "override_scope_loaded"),
+                ("override_complexity", "override_complexity_loaded"),
+                ("override_action", "override_action_loaded"),
+                ("override_reason", "override_reason_loaded"),
+                ("override_enabled", "override_enabled_loaded"),
+            ]:
+                if source_col in baseline_df.columns:
+                    baseline_df[target_col] = baseline_df[source_col].where(
+                        baseline_df[source_col].notna(),
+                        baseline_df[target_col],
+                    )
+            drop_cols = [
+                column
+                for column in baseline_df.columns
+                if column.endswith("_loaded")
+            ]
+            if drop_cols:
+                baseline_df = baseline_df.drop(columns=drop_cols)
         usage_events_df = (
             st.session_state.mongo_usage_events_df.copy()
             if st.session_state.mongo_usage_events_df is not None
             else pd.DataFrame()
         )
         usage_metadata = st.session_state.mongo_usage_metadata or {}
+        usage_metadata = {
+            **usage_metadata,
+            "rules_version": reassessed_result.rules_version,
+            "override_count": reassessed_result.override_count,
+            "rules_coverage_rate": reassessed_result.rules_coverage_rate,
+            "unclassified_feature_count": reassessed_result.unclassified_feature_count,
+        }
         usage_output_dir = st.session_state.mongo_usage_output_dir or ""
 
         usage_target_version, usage_target_mode = _render_oracle_target_controls(
@@ -4387,38 +5174,25 @@ with usage_right_panel:
                 )
             )
         usage_summary_df = build_usage_summary(usage_detail_df)
+        supported_usage_df = usage_detail_df[
+            usage_detail_df["oracle_support_status"].eq("Supported")
+        ].copy() if "oracle_support_status" in usage_detail_df.columns else pd.DataFrame()
+        not_supported_usage_df = usage_detail_df[
+            usage_detail_df["oracle_support_status"].eq("Not Supported")
+        ].copy() if "oracle_support_status" in usage_detail_df.columns else pd.DataFrame()
 
-        usage_overview_cols = st.columns(5, gap="medium")
+        usage_overview_cols = st.columns(3, gap="medium")
         with usage_overview_cols[0]:
-            st.metric("Profile 样本数", int(usage_metadata.get("profile_count", 0)))
+            st.metric("唯一 API 数量", _unique_api_count(usage_detail_df))
         with usage_overview_cols[1]:
-            st.metric("功能项数", len(usage_detail_df))
-        with usage_overview_cols[2]:
             st.metric(
                 "Supported",
-                int(
-                    usage_detail_df["oracle_support_status"]
-                    .eq("Supported")
-                    .sum()
-                ) if "oracle_support_status" in usage_detail_df.columns else 0,
+                _unique_api_count(supported_usage_df),
             )
-        with usage_overview_cols[3]:
+        with usage_overview_cols[2]:
             st.metric(
                 "Not Supported",
-                int(
-                    usage_detail_df["oracle_support_status"]
-                    .eq("Not Supported")
-                    .sum()
-                ) if "oracle_support_status" in usage_detail_df.columns else 0,
-            )
-        with usage_overview_cols[4]:
-            st.metric(
-                "Unknown",
-                int(
-                    usage_detail_df["oracle_support_status"]
-                    .eq("Unknown")
-                    .sum()
-                ) if "oracle_support_status" in usage_detail_df.columns else 0,
+                _unique_api_count(not_supported_usage_df),
             )
 
         if usage_metadata.get("truncated"):
@@ -4427,7 +5201,10 @@ with usage_right_panel:
             f"数据库: {usage_metadata.get('database_name', '')} | "
             f"抓取时间: {usage_metadata.get('fetched_at', '')} | "
             f"开始时间: {usage_metadata.get('start_time', '') or '未设置'} | "
-            f"结束时间: {usage_metadata.get('end_time', '') or '未设置'}"
+            f"结束时间: {usage_metadata.get('end_time', '') or '未设置'} | "
+            f"规则版本: {usage_metadata.get('rules_version', '') or 'unknown'} | "
+            f"客户覆盖: {int(usage_metadata.get('override_count', 0) or 0)} | "
+            f"未分类 API: {int(usage_metadata.get('unclassified_feature_count', 0) or 0)}"
         )
 
         selected_usage_status = [
@@ -4442,6 +5219,12 @@ with usage_right_panel:
         selected_commands = [
             str(item) for item in st.session_state.get("usage_command_filter", []) or []
         ]
+        selected_complexities = [
+            str(item) for item in st.session_state.get("usage_complexity_filter", []) or []
+        ]
+        selected_scopes = [
+            str(item) for item in st.session_state.get("usage_scope_filter", []) or []
+        ]
         usage_keyword = str(st.session_state.get("usage_keyword_filter", "") or "")
         filtered_usage_df = _filter_usage_detail_df(
             usage_detail_df,
@@ -4449,14 +5232,37 @@ with usage_right_panel:
             selected_op_types=selected_op_types,
             selected_feature_types=selected_feature_types,
             selected_commands=selected_commands,
+            selected_complexities=selected_complexities,
+            selected_scopes=selected_scopes,
             keyword=usage_keyword,
         )
         filtered_usage_summary_df = build_usage_summary(filtered_usage_df)
+        filtered_migration_summary_df = (
+            migration_summary_df.copy()
+            if not migration_summary_df.empty
+            else pd.DataFrame()
+        )
+        filtered_hotspots_df = (
+            hotspots_df.copy()
+            if not hotspots_df.empty
+            else pd.DataFrame()
+        )
+        filtered_excluded_df = (
+            excluded_df.copy()
+            if not excluded_df.empty
+            else pd.DataFrame()
+        )
 
         usage_offline_report_html = _build_usage_offline_report_html(
             output_dir=usage_output_dir,
             metadata=usage_metadata,
             detail_df=usage_detail_df,
+            baseline_df=baseline_df,
+            source_detail_row_count=(
+                len(st.session_state.result_detail_df)
+                if st.session_state.result_detail_df is not None
+                else 0
+            ),
             target_version=usage_target_version,
             target_mode=usage_target_mode,
             selected_statuses=[
@@ -4471,12 +5277,24 @@ with usage_right_panel:
             selected_commands=[
                 str(item) for item in st.session_state.get("usage_command_filter", []) or []
             ],
+            selected_complexities=[
+                str(item) for item in st.session_state.get("usage_complexity_filter", []) or []
+            ],
+            selected_scopes=[
+                str(item) for item in st.session_state.get("usage_scope_filter", []) or []
+            ],
             keyword=str(st.session_state.get("usage_keyword_filter", "") or ""),
+            show_baseline_advanced_columns=bool(
+                st.session_state.get("usage_baseline_show_advanced_columns", False)
+            ),
         )
         usage_workbook_bytes = _build_excel_workbook_bytes(
             [
                 ("detail", filtered_usage_df),
                 ("summary", filtered_usage_summary_df),
+                ("migration_summary", filtered_migration_summary_df),
+                ("hotspots", filtered_hotspots_df),
+                ("excluded", filtered_excluded_df),
             ]
         )
 
@@ -4484,31 +5302,34 @@ with usage_right_panel:
             usage_last_refresh_time = datetime.fromtimestamp(Path(usage_output_dir).stat().st_mtime).strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
-            st.caption(f"上次刷新时间: {usage_last_refresh_time}")
+            st.caption(f"上次刷新：{usage_last_refresh_time}")
         elif st.session_state.mongo_usage_cache_save_notice:
             st.caption(st.session_state.mongo_usage_cache_save_notice)
         else:
-            st.caption("当前 MongoDB Usage 分析结果尚未保存到本地缓存。")
+            st.caption("当前结果尚未写入本地缓存。")
 
         usage_download_cols = st.columns([0.65, 0.65, 0.65, 3.05], gap="medium")
         with usage_download_cols[0]:
             if st.button(
                 "",
                 key="save_usage_cache",
-                help="保存当前 MongoDB Usage 分析结果到本地缓存",
+                help="保存当前结果到本地缓存",
                 icon=":material/save:",
                 width="stretch",
             ):
                 saved_dir = _persist_usage_cache(
-                    detail_df=st.session_state.mongo_usage_detail_df,
-                    summary_df=st.session_state.mongo_usage_summary_df,
+                    detail_df=usage_detail_df,
+                    summary_df=usage_summary_df,
                     metadata=usage_metadata,
                     report_html=usage_offline_report_html,
                     workbook_bytes=usage_workbook_bytes,
+                    migration_summary_df=migration_summary_df,
+                    hotspots_df=hotspots_df,
+                    excluded_df=excluded_df,
                 )
                 st.session_state.mongo_usage_output_dir = str(saved_dir)
                 st.session_state.mongo_usage_restored_from_disk = False
-                st.session_state.mongo_usage_cache_save_notice = f"已保存 MongoDB Usage 本地缓存: {saved_dir}"
+                st.session_state.mongo_usage_cache_save_notice = f"已保存本地缓存：{saved_dir}"
                 st.rerun()
         with usage_download_cols[1]:
             st.download_button(
@@ -4534,55 +5355,103 @@ with usage_right_panel:
             st.markdown("")
 
         with st.container(border=True):
-            st.markdown('<div class="panel-subsection-title">功能使用明细</div>', unsafe_allow_html=True)
+            st.markdown('<div class="panel-subsection-title">分析筛选</div>', unsafe_allow_html=True)
             usage_mode_label = _oracle_target_mode_label(usage_target_mode)
             st.caption(
-                f"当前支持判断基于所选组合: Oracle {usage_target_version} + {usage_mode_label}"
+                f"当前支持判断：Oracle {usage_target_version} + {usage_mode_label}"
             )
-            usage_filter_row_1 = st.columns(2, gap="medium")
-            with usage_filter_row_1[0]:
-                usage_status_options = sorted(
-                    usage_detail_df["oracle_support_status"].fillna("").astype(str).unique().tolist()
+            usage_status_values = set(
+                usage_detail_df["oracle_support_status"].fillna("").astype(str).unique().tolist()
+            )
+            if not baseline_df.empty and "oracle_support_statuses" in baseline_df.columns:
+                for raw_value in baseline_df["oracle_support_statuses"].fillna("").astype(str).tolist():
+                    usage_status_values.update(
+                        item.strip() for item in raw_value.split(",") if item.strip()
+                    )
+            usage_status_options = sorted(usage_status_values)
+            op_type_options = sorted(
+                usage_detail_df["op_type"].fillna("").astype(str).unique().tolist()
+            ) if "op_type" in usage_detail_df.columns else []
+            feature_type_options = sorted(
+                usage_detail_df["feature_type"].fillna("").astype(str).unique().tolist()
+            )
+            command_options = sorted(
+                usage_detail_df["command_name"].fillna("").astype(str).unique().tolist()
+            )
+            complexity_options = sorted(
+                usage_detail_df["effective_complexity"].fillna("").astype(str).unique().tolist()
+            ) if "effective_complexity" in usage_detail_df.columns else []
+            scope_values: set[str] = set()
+            if "effective_migration_necessity" in usage_detail_df.columns:
+                scope_values.update(
+                    usage_detail_df["effective_migration_necessity"].fillna("").astype(str).tolist()
                 )
+            elif "effective_scope" in usage_detail_df.columns:
+                scope_values.update(usage_detail_df["effective_scope"].fillna("").astype(str).tolist())
+            if not baseline_df.empty:
+                if "effective_migration_necessity" in baseline_df.columns:
+                    scope_values.update(
+                        baseline_df["effective_migration_necessity"].fillna("").astype(str).tolist()
+                    )
+                elif "effective_scope" in baseline_df.columns:
+                    scope_values.update(baseline_df["effective_scope"].fillna("").astype(str).tolist())
+            scope_options = sorted(option for option in scope_values if option)
+            current_scope_state = [
+                str(item)
+                for item in st.session_state.get("usage_scope_filter", []) or []
+                if str(item) in set(scope_options)
+            ]
+            if current_scope_state != (st.session_state.get("usage_scope_filter", []) or []):
+                st.session_state.usage_scope_filter = current_scope_state
+
+            primary_filter_cols = st.columns([1.4, 1, 1], gap="medium")
+            with primary_filter_cols[0]:
+                usage_keyword = st.text_input(
+                    "关键字搜索",
+                    key="usage_keyword_filter",
+                    placeholder="搜索 feature / collection / op / Oracle 分类 / 迁移动作",
+                )
+            with primary_filter_cols[1]:
                 selected_usage_status = st.multiselect(
-                    "按当前组合支持判断筛选",
+                    "支持判断",
                     options=[option for option in usage_status_options if option],
                     key="usage_status_filter",
+                    placeholder="支持判断",
                 )
-            with usage_filter_row_1[1]:
-                op_type_options = sorted(
-                    usage_detail_df["op_type"].fillna("").astype(str).unique().tolist()
-                ) if "op_type" in usage_detail_df.columns else []
-                selected_op_types = st.multiselect(
-                    "按 Profile op 筛选",
-                    options=[option for option in op_type_options if option],
-                    key="usage_op_filter",
-                )
-            usage_filter_row_2 = st.columns(2, gap="medium")
-            with usage_filter_row_2[0]:
-                feature_type_options = sorted(
-                    usage_detail_df["feature_type"].fillna("").astype(str).unique().tolist()
-                )
+            with primary_filter_cols[2]:
                 selected_feature_types = st.multiselect(
-                    "按功能类型筛选",
+                    "功能类型",
                     options=[option for option in feature_type_options if option],
                     key="usage_feature_type_filter",
-                )
-            with usage_filter_row_2[1]:
-                command_options = sorted(
-                    usage_detail_df["command_name"].fillna("").astype(str).unique().tolist()
-                )
-                selected_commands = st.multiselect(
-                    "按命令筛选",
-                    options=[option for option in command_options if option],
-                    key="usage_command_filter",
+                    placeholder="功能类型",
                 )
 
-            usage_keyword = st.text_input(
-                "关键字搜索",
-                key="usage_keyword_filter",
-                placeholder="搜索 feature / collection / op / Oracle 分类",
-            )
+            with st.expander("更多筛选", expanded=False):
+                advanced_filter_cols = st.columns(4, gap="medium")
+                with advanced_filter_cols[0]:
+                    selected_commands = st.multiselect(
+                        "按命令筛选",
+                        options=[option for option in command_options if option],
+                        key="usage_command_filter",
+                    )
+                with advanced_filter_cols[1]:
+                    selected_op_types = st.multiselect(
+                        "按 Profile op 筛选",
+                        options=[option for option in op_type_options if option],
+                        key="usage_op_filter",
+                    )
+                with advanced_filter_cols[2]:
+                    selected_complexities = st.multiselect(
+                        "按迁移复杂度筛选",
+                        options=[option for option in complexity_options if option],
+                        key="usage_complexity_filter",
+                    )
+                with advanced_filter_cols[3]:
+                    selected_scopes = st.multiselect(
+                        "按迁移必要性筛选",
+                        options=[option for option in scope_options if option],
+                        key="usage_scope_filter",
+                    )
 
             filtered_usage_df = _filter_usage_detail_df(
                 usage_detail_df,
@@ -4590,6 +5459,8 @@ with usage_right_panel:
                 selected_op_types=selected_op_types,
                 selected_feature_types=selected_feature_types,
                 selected_commands=selected_commands,
+                selected_complexities=selected_complexities,
+                selected_scopes=selected_scopes,
                 keyword=usage_keyword,
             )
 
@@ -4605,6 +5476,16 @@ with usage_right_panel:
             risk_df = risk_df[risk_df["feature_type"].isin(selected_feature_types)]
         if selected_commands:
             risk_df = risk_df[risk_df["command_name"].isin(selected_commands)]
+        if selected_complexities and "effective_complexity" in risk_df.columns:
+            risk_df = risk_df[risk_df["effective_complexity"].isin(selected_complexities)]
+        if selected_scopes:
+            risk_necessity_col = (
+                "effective_migration_necessity"
+                if "effective_migration_necessity" in risk_df.columns
+                else "effective_scope"
+            )
+            if risk_necessity_col in risk_df.columns:
+                risk_df = risk_df[risk_df[risk_necessity_col].isin(selected_scopes)]
         if selected_usage_status:
             risk_df = risk_df[risk_df["oracle_support_status"].isin(selected_usage_status)]
         if usage_keyword.strip():
@@ -4617,71 +5498,221 @@ with usage_right_panel:
                 "oracle_category",
                 "oracle_support_since",
                 "oracle_support_status",
+                "effective_complexity",
+                "effective_migration_necessity",
+                "recommended_action",
             ]
-            risk_mask = risk_df[risk_search_cols].fillna("").astype(str).apply(
+            available_risk_search_cols = [col for col in risk_search_cols if col in risk_df.columns]
+            risk_mask = risk_df[available_risk_search_cols].fillna("").astype(str).apply(
                 lambda row: row.str.lower().str.contains(keyword, regex=False).any(),
                 axis=1,
             )
             risk_df = risk_df[risk_mask]
         risk_df = risk_df.sort_values(
-            by=["usage_count", "oracle_support_status", "feature_type", "feature_name"],
-            ascending=[False, True, True, True],
+            by=["migration_priority", "effective_complexity", "usage_count", "feature_type", "feature_name"],
+            ascending=[False, False, False, True, True],
         )
 
-        usage_detail_tab, usage_risk_tab, usage_evidence_tab, usage_profile_tab = st.tabs(
-            ["功能明细", "重点关注项", "证据样本", "Profile 样本"]
+        usage_baseline_tab, usage_workload_tab = st.tabs(
+            ["API 基准", "实际使用 API"]
         )
 
-        with usage_detail_tab:
-            display_cols = [
-                "feature_type",
-                "feature_name",
-                "command_name",
-                "op_type",
-                "database",
-                "collection",
-                "usage_count",
-                "first_seen",
-                "last_seen",
-                "max_duration_ms",
-                "oracle_support_status",
-                "oracle_support_since",
-                "oracle_category",
-            ]
-            available_display_cols = [
-                column for column in display_cols if column in filtered_usage_df.columns
-            ]
-            st.dataframe(
-                filtered_usage_df[available_display_cols],
-                width="stretch",
-                hide_index=True,
-                height=_dataframe_height(len(filtered_usage_df), max_height=440),
-                column_config=_usage_column_config(),
-            )
-
-        with usage_risk_tab:
-            if risk_df.empty:
-                st.info("当前样本中没有 Partially Supported / Not Supported / Unknown 的功能项。")
+        with usage_baseline_tab:
+            if baseline_df.empty:
+                st.info("当前没有可展示的 API 基准。")
             else:
-                risk_display_df = risk_df[
+                if st.session_state.mongo_usage_override_save_notice:
+                    st.success(st.session_state.mongo_usage_override_save_notice)
+                baseline_source_df = _filter_baseline_df(
+                    baseline_df,
+                    selected_statuses=selected_usage_status,
+                    selected_feature_types=selected_feature_types,
+                    selected_commands=selected_commands,
+                    selected_complexities=selected_complexities,
+                    selected_scopes=selected_scopes,
+                    keyword=usage_keyword,
+                    only_observed=False,
+                )
+                total_api_count = _unique_api_count(baseline_source_df)
+                observed_api_count = _unique_api_count(filtered_usage_df)
+                source_detail_row_count = (
+                    len(st.session_state.result_detail_df)
+                    if st.session_state.result_detail_df is not None
+                    else 0
+                )
+                baseline_metric_cols = st.columns(3, gap="medium")
+                with baseline_metric_cols[0]:
+                    st.metric("文档同步明细记录数", source_detail_row_count)
+                with baseline_metric_cols[1]:
+                    st.metric("全部唯一 API 数量", total_api_count)
+                with baseline_metric_cols[2]:
+                    st.metric("实际使用到的 API 数量", observed_api_count)
+
+                st.caption(
+                    "展示文档同步得到的全部 MongoDB API 的默认迁移必要性和迁移复杂度评估。"
+                    "这里的必要性以应用兼容为核心：应用行为和应用管理对象保留在范围内，运维/诊断命令默认排除。"
+                    "当前目标组合下只要 Oracle 标记为 Supported，默认认为应用代码可直接使用，复杂度降为 Low。"
+                )
+                show_baseline_advanced_columns = st.toggle(
+                    "显示高级列",
+                    key="usage_baseline_show_advanced_columns",
+                    help="默认只显示迁移判断需要的核心列；开启后显示 Oracle 分类、原始支持状态、观察样本等辅助列。",
+                )
+                baseline_editor_df = baseline_source_df[
                     [
-                        "feature_type",
-                        "feature_name",
-                        "command_name",
-                        "op_type",
-                        "database",
-                        "collection",
-                        "usage_count",
-                        "oracle_support_status",
-                        "oracle_support_since",
-                        "oracle_category",
+                        column
+                        for column in _baseline_display_columns(show_baseline_advanced_columns)
+                        if column in baseline_source_df.columns
                     ]
                 ].copy()
-                selected_risk_event = st.dataframe(
-                    risk_display_df,
+                edited_baseline_df = st.data_editor(
+                    baseline_editor_df,
                     width="stretch",
                     hide_index=True,
-                    height=_dataframe_height(len(risk_df), max_height=420),
+                    height=_dataframe_height(len(baseline_editor_df), max_height=520),
+                    key="usage_baseline_editor",
+                    disabled=[
+                        "feature_type",
+                        "feature_name",
+                        "effective_migration_necessity",
+                        "oracle_support_since",
+                        "effective_complexity",
+                        "complexity_explanation",
+                    ],
+                    column_config={
+                        "mongo_short_description": st.column_config.TextColumn(
+                            "mongo_short_description",
+                            help="来自文档同步关联到的 MongoDB 官方说明。",
+                            width="large",
+                        ),
+                        "observed_in_profile": st.column_config.CheckboxColumn(
+                            "observed_in_profile",
+                            help="该 API 是否在当前 system.profile 样本中被观察到。",
+                        ),
+                        "observed_usage_count": st.column_config.NumberColumn(
+                            "observed_usage_count",
+                            help="当前 profile 样本里聚合后的 API 观察次数。",
+                            format="%d",
+                        ),
+                        "observed_command_contexts": st.column_config.TextColumn(
+                            "observed_command_contexts",
+                            help="该 API 在当前 profile 样本中出现的命令上下文。",
+                            width="medium",
+                        ),
+                        "effective_migration_necessity": st.column_config.TextColumn(
+                            "迁移必要性",
+                            help="从应用兼容角度看该 API 是否有必要纳入迁移范围。",
+                            width="medium",
+                        ),
+                        "complexity_explanation": st.column_config.TextColumn(
+                            "complexity_explanation",
+                            help="从迁移到 Oracle Database API for MongoDB 的角度解释该复杂度。",
+                            width="large",
+                        ),
+                        "override_complexity": st.column_config.SelectboxColumn(
+                            "override_complexity",
+                            options=["", *sorted(ALLOWED_COMPLEXITY, key=lambda value: ["Ignore","Low","Medium","High","Blocker"].index(value))],
+                            help="为空表示不覆盖默认复杂度。",
+                        ),
+                        "override_reason": st.column_config.TextColumn(
+                            "override_reason",
+                            help="填写覆盖原因，建议写项目上下文。",
+                            width="large",
+                        ),
+                        "override_enabled": st.column_config.CheckboxColumn(
+                            "override_enabled",
+                            help="勾选后会把这一行写入 customer_overrides.csv。",
+                        ),
+                    },
+                )
+                baseline_action_cols = st.columns([0.9, 3.1], gap="medium")
+                with baseline_action_cols[0]:
+                    if st.button("保存覆盖规则", type="primary", width="stretch"):
+                        override_rows = edited_baseline_df.copy()
+                        if "override_enabled" not in override_rows.columns:
+                            override_rows["override_enabled"] = False
+                        for column in ["override_complexity", "override_reason"]:
+                            override_rows[column] = override_rows[column].fillna("").astype(str).str.strip()
+                        override_rows["override_enabled"] = override_rows["override_enabled"].fillna(False).astype(bool)
+                        active_mask = (
+                            override_rows["override_enabled"]
+                            | override_rows["override_complexity"].ne("")
+                            | override_rows["override_reason"].ne("")
+                        )
+                        overrides_to_save = override_rows.loc[
+                            active_mask,
+                            [
+                                "feature_type",
+                                "feature_name",
+                                "override_complexity",
+                                "override_reason",
+                            ],
+                        ].copy()
+                        overrides_to_save["override_scope"] = ""
+                        overrides_to_save["override_action"] = ""
+                        overrides_to_save["enabled"] = "true"
+                        save_path = save_customer_overrides(overrides_to_save)
+                        st.session_state.mongo_usage_override_save_notice = f"已保存覆盖规则：{save_path}"
+                        st.rerun()
+                with baseline_action_cols[1]:
+                    st.caption("保存后会写入 `config/migration_rules/customer_overrides.csv`，并在当前页面自动重算迁移复杂度。")
+
+        with usage_workload_tab:
+            if filtered_usage_df.empty:
+                st.info("当前没有可展示的实际使用 API。")
+            else:
+                workload_summary_cols = st.columns(3, gap="medium")
+                with workload_summary_cols[0]:
+                    st.metric("实际使用 API 数量", _unique_api_count(filtered_usage_df))
+                with workload_summary_cols[1]:
+                    st.metric(
+                        "高复杂度 API",
+                        _unique_api_count(
+                            filtered_usage_df[
+                                filtered_usage_df["effective_complexity"].isin(["High", "Blocker"])
+                            ]
+                        ) if "effective_complexity" in filtered_usage_df.columns else 0,
+                    )
+                with workload_summary_cols[2]:
+                    filtered_hotspots_df = filtered_usage_df[
+                        filtered_usage_df["effective_scope"].eq("application_api")
+                        & (
+                            filtered_usage_df["effective_complexity"].isin(["High", "Blocker"])
+                            | (
+                                filtered_usage_df["effective_complexity"].eq("Medium")
+                                & pd.to_numeric(
+                                    filtered_usage_df["usage_count"],
+                                    errors="coerce",
+                                ).fillna(0).ge(20)
+                            )
+                        )
+                    ].copy() if {
+                        "effective_scope",
+                        "effective_complexity",
+                        "usage_count",
+                    }.issubset(filtered_usage_df.columns) else pd.DataFrame()
+                    st.metric("热点项数量", _unique_api_count(filtered_hotspots_df))
+
+                workload_display_df = filtered_usage_df[
+                    [
+                        column for column in [
+                            "feature_type",
+                            "feature_name",
+                            "command_name",
+                            "effective_migration_necessity",
+                            "usage_count",
+                            "oracle_support_status",
+                            "effective_complexity",
+                            "migration_priority",
+                        ] if column in filtered_usage_df.columns
+                    ]
+                ].copy()
+                st.caption("展示当前 system.profile 中实际观察到的 API，并同时给出迁移必要性、复杂度和建议动作。当前目标组合下只要 Oracle 标记为 Supported，默认复杂度降为 Low。")
+                selected_risk_event = st.dataframe(
+                    workload_display_df,
+                    width="stretch",
+                    hide_index=True,
+                    height=_dataframe_height(len(workload_display_df), max_height=420),
                     key="usage_risk_selector_table",
                     on_select="rerun",
                     selection_mode="single-row",
@@ -4689,67 +5720,51 @@ with usage_right_panel:
                 )
                 selected_risk_indices = _selected_dataframe_rows(selected_risk_event)
                 if selected_risk_indices:
-                    selected_risk_row = risk_df.iloc[selected_risk_indices[0]]
-
-        with usage_evidence_tab:
-            if selected_risk_row is None:
-                st.info("请先在“重点关注项”页签里点击一行，再查看对应证据样本。")
-            elif str(selected_risk_row.get("oracle_support_status", "") or "") != "Not Supported":
-                st.info("当前选中项不是 Not Supported，迁移关注证据样本仅展示不支持项。")
-            else:
-                evidence_mask = (
-                    filtered_usage_df["feature_type"].astype(str).eq(str(selected_risk_row["feature_type"]))
-                    & filtered_usage_df["feature_name"].astype(str).eq(str(selected_risk_row["feature_name"]))
-                    & filtered_usage_df["command_name"].astype(str).eq(str(selected_risk_row["command_name"]))
-                    & filtered_usage_df["database"].astype(str).eq(str(selected_risk_row["database"]))
-                    & filtered_usage_df["collection"].astype(str).eq(str(selected_risk_row["collection"]))
-                    & filtered_usage_df["oracle_support_status"].astype(str).eq(
-                        str(selected_risk_row["oracle_support_status"])
-                    )
-                )
-                if "op_type" in filtered_usage_df.columns:
-                    evidence_mask = evidence_mask & filtered_usage_df["op_type"].fillna("").astype(str).eq(
-                        str(selected_risk_row.get("op_type", "") or "")
-                    )
-                evidence_df = filtered_usage_df[evidence_mask].copy().sort_values(
-                    by=["usage_count", "feature_type", "feature_name"],
-                    ascending=[False, True, True],
-                )
-                if evidence_df.empty:
-                    st.info("当前选中项没有可展示的证据样本。")
+                    selected_risk_row = filtered_usage_df.iloc[selected_risk_indices[0]]
+                st.markdown("#### 证据样本")
+                if selected_risk_row is None:
+                    st.info("请先在上面的“实际使用 API”表格中选择一行，再查看证据样本。")
                 else:
-                    evidence_row = evidence_df.iloc[0]
-                    evidence_cols = st.columns(2, gap="large")
-                    with evidence_cols[0]:
-                        st.markdown(
-                            f"""
-                            - `feature_type`: {evidence_row['feature_type']}
-                            - `feature_name`: {evidence_row['feature_name']}
-                            - `command_name`: {evidence_row['command_name']}
-                            - `op_type`: {evidence_row.get('op_type', '') or '-'}
-                            - `database.collection`: {evidence_row['database']}.{evidence_row['collection']}
-                            - `usage_count`: {evidence_row['usage_count']}
-                            - `oracle_support_status`: {evidence_row['oracle_support_status']}
-                            - `oracle_support_since`: {evidence_row['oracle_support_since'] or '-'}
-                            - `oracle_category`: {evidence_row['oracle_category'] or '-'}
-                            """
+                    evidence_mask = (
+                        filtered_usage_df["feature_type"].astype(str).eq(str(selected_risk_row["feature_type"]))
+                        & filtered_usage_df["feature_name"].astype(str).eq(str(selected_risk_row["feature_name"]))
+                        & filtered_usage_df["command_name"].astype(str).eq(str(selected_risk_row["command_name"]))
+                        & filtered_usage_df["database"].astype(str).eq(str(selected_risk_row["database"]))
+                        & filtered_usage_df["collection"].astype(str).eq(str(selected_risk_row["collection"]))
+                        & filtered_usage_df["oracle_support_status"].astype(str).eq(
+                            str(selected_risk_row["oracle_support_status"])
                         )
-                    with evidence_cols[1]:
-                        st.markdown(f"**sample_path**: `{evidence_row['sample_path']}`")
-                        st.code(str(evidence_row["sample_value"]), language="json")
-
-        with usage_profile_tab:
-            if (
-                st.session_state.get("mongo_usage_trace_enabled", False)
-                and not usage_events_df.empty
-            ):
-                st.dataframe(
-                    usage_events_df.head(200),
-                    width="stretch",
-                    hide_index=True,
-                    height=_dataframe_height(min(len(usage_events_df), 200), max_height=420),
-                )
-            elif usage_events_df.empty:
-                st.info("当前没有可展示的标准化 Profile 事件样本。")
-            else:
-                st.info("如需查看标准化 Profile 事件样本，请在左侧启用 trace 信息后重新分析。")
+                    )
+                    if "op_type" in filtered_usage_df.columns:
+                        evidence_mask = evidence_mask & filtered_usage_df["op_type"].fillna("").astype(str).eq(
+                            str(selected_risk_row.get("op_type", "") or "")
+                        )
+                    evidence_df = filtered_usage_df[evidence_mask].copy().sort_values(
+                        by=["usage_count", "feature_type", "feature_name"],
+                        ascending=[False, True, True],
+                    )
+                    if evidence_df.empty:
+                        st.info("当前选中项没有可展示的证据样本。")
+                    else:
+                        evidence_row = evidence_df.iloc[0]
+                        evidence_cols = st.columns(2, gap="large")
+                        with evidence_cols[0]:
+                            st.markdown(
+                                f"""
+                                - `feature_type`: {evidence_row['feature_type']}
+                                - `feature_name`: {evidence_row['feature_name']}
+                                - `command_name`: {evidence_row['command_name']}
+                                - `op_type`: {evidence_row.get('op_type', '') or '-'}
+                                - `database.collection`: {evidence_row['database']}.{evidence_row['collection']}
+                                - `usage_count`: {evidence_row['usage_count']}
+                                - `oracle_support_status`: {evidence_row['oracle_support_status']}
+                                - `oracle_support_since`: {evidence_row['oracle_support_since'] or '-'}
+                                - `oracle_category`: {evidence_row['oracle_category'] or '-'}
+                                - `effective_migration_necessity`: {evidence_row.get('effective_migration_necessity', '') or '-'}
+                                - `effective_complexity`: {evidence_row.get('effective_complexity', '') or '-'}
+                                - `recommended_action`: {evidence_row.get('recommended_action', '') or '-'}
+                                """
+                            )
+                        with evidence_cols[1]:
+                            st.markdown(f"**命令中的位置**: `{evidence_row['sample_path']}`")
+                            st.code(str(evidence_row["sample_value"]), language="json")

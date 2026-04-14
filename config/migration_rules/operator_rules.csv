@@ -1,0 +1,25 @@
+feature_name,feature_type,migration_scope,scope_confidence,needs_review,default_complexity,complexity_reason,recommended_action,review_priority,notes,enabled
+$eq,operator,application_api,high,false,Low,Simple comparison operator,direct_use,P2,,true
+$ne,operator,application_api,high,false,Low,Simple comparison operator,direct_use,P2,,true
+$gt,operator,application_api,high,false,Low,Simple comparison operator,direct_use,P2,,true
+$gte,operator,application_api,high,false,Low,Simple comparison operator,direct_use,P2,,true
+$lt,operator,application_api,high,false,Low,Simple comparison operator,direct_use,P2,,true
+$lte,operator,application_api,high,false,Low,Simple comparison operator,direct_use,P2,,true
+$in,operator,application_api,high,false,Low,Common membership filter,direct_use,P2,,true
+$nin,operator,application_api,medium,false,Medium,Negative set filter needs validation,verify_semantics,P2,,true
+$and,operator,application_api,high,false,Low,Common logical operator,direct_use,P2,,true
+$or,operator,application_api,high,false,Low,Common logical operator,direct_use,P2,,true
+$not,operator,application_api,medium,false,Medium,Negation semantics need testing,verify_semantics,P1,,true
+$nor,operator,application_api,medium,false,Medium,Negation semantics need testing,verify_semantics,P1,,true
+$exists,operator,application_api,medium,false,Medium,Field existence semantics need validation,verify_semantics,P1,,true
+$regex,operator,application_api,medium,false,Medium,Regex compatibility and performance require review,verify_semantics,P1,,true
+$elemMatch,operator,application_api,medium,false,Medium,Array matching semantics require testing,verify_semantics,P1,,true
+$size,operator,application_api,medium,false,Medium,Array cardinality checks need validation,verify_semantics,P1,,true
+$all,operator,application_api,medium,false,Medium,Array containment semantics need validation,verify_semantics,P1,,true
+$set,operator,application_api,high,false,Low,Common update operator,direct_use,P1,,true
+$unset,operator,application_api,high,false,Low,Common update operator,direct_use,P1,,true
+$inc,operator,application_api,high,false,Low,Common update operator,direct_use,P1,,true
+$push,operator,application_api,medium,false,Medium,Array mutation behavior needs review,minor_update_rewrite,P1,,true
+$pull,operator,application_api,medium,false,Medium,Array mutation behavior needs review,minor_update_rewrite,P1,,true
+$addToSet,operator,application_api,medium,false,Medium,Array uniqueness mutation needs review,minor_update_rewrite,P1,,true
+$rename,operator,application_api,medium,true,High,Schema-shaping updates often need redesign,replace_operator,P0,,true

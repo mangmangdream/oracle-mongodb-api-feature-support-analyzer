@@ -1,0 +1,34 @@
+feature_name,feature_type,migration_scope,scope_confidence,needs_review,default_complexity,complexity_reason,recommended_action,review_priority,notes,enabled
+find,command,application_api,high,false,Low,Core read API and usually directly portable,direct_use,P0,,true
+insert,command,application_api,high,false,Low,Core write API and usually directly portable,direct_use,P0,,true
+update,command,application_api,high,false,Low,Core write API but final complexity can depend on update operators,minor_update_rewrite,P0,,true
+delete,command,application_api,high,false,Low,Core delete API and usually directly portable,direct_use,P0,,true
+findAndModify,command,application_api,high,false,Medium,Return semantics and option handling often need verification,verify_semantics,P0,,true
+distinct,command,application_api,high,false,Medium,Needs validation for result semantics and performance,verify_semantics,P1,,true
+count,command,application_api,high,false,Medium,Legacy usage often needs query-side adjustment,minor_query_rewrite,P1,,true
+aggregate,command,application_api,high,false,High,Pipeline complexity depends on stages and expressions,rewrite_aggregation,P0,,true
+bulkWrite,command,application_api,high,false,Medium,Batch write semantics should be verified as part of application compatibility,verify_semantics,P1,,true
+create,command,application_api,medium,true,Medium,Application-managed collection creation may need to be preserved if the application initializes objects at runtime,verify_semantics,P1,,true
+createIndexes,command,application_api,medium,true,Medium,Application-managed index creation is usually necessary to preserve application startup and query behavior,review_index_management,P0,,true
+commitTransaction,command,application_api,high,false,Medium,Transaction lifecycle command and part of application correctness,verify_semantics,P0,,true
+abortTransaction,command,application_api,high,false,Medium,Transaction lifecycle command and part of application correctness,verify_semantics,P0,,true
+startSession,command,application_api,high,false,Medium,Session lifecycle can affect application transaction behavior,verify_semantics,P1,,true
+endSessions,command,application_api,medium,false,Medium,Session cleanup behavior may need verification if explicitly used by the application,verify_semantics,P2,,true
+dropIndexes,command,likely_admin,high,false,Ignore,Index cleanup is only needed if the customer wants to preserve the same operational workflow,exclude_from_scope,P2,,true
+listIndexes,command,likely_admin,high,false,Ignore,Index inspection is usually tooling or operational behavior,exclude_from_scope,P2,,true
+listCollections,command,likely_admin,high,false,Ignore,Collection discovery is usually tooling or operational behavior outside core application compatibility,exclude_from_scope,P2,,true
+renameCollection,command,likely_admin,medium,true,Ignore,Collection rename is usually a migration or operational task rather than an application compatibility requirement,exclude_from_scope,P2,,true
+cloneCollectionAsCapped,command,ignore,high,false,Ignore,Specialized collection maintenance command outside normal application compatibility scope,exclude_from_scope,P2,,true
+convertToCapped,command,ignore,high,false,Ignore,Specialized collection maintenance command outside normal application compatibility scope,exclude_from_scope,P2,,true
+filemd5,command,ignore,medium,false,Ignore,Specialized GridFS or maintenance command that is usually not required for application compatibility,exclude_from_scope,P2,,true
+listDatabases,command,ignore,high,false,Ignore,Administrative discovery command outside migration scope,exclude_from_scope,P2,,true
+serverStatus,command,ignore,high,false,Ignore,Operational diagnostic command outside migration scope,exclude_from_scope,P2,,true
+dbStats,command,ignore,high,false,Ignore,Administrative command outside migration scope,exclude_from_scope,P2,,true
+collStats,command,ignore,high,false,Ignore,Administrative command outside migration scope,exclude_from_scope,P2,,true
+usersInfo,command,ignore,high,false,Ignore,Administrative security inspection command outside migration scope,exclude_from_scope,P2,,true
+replSetGetStatus,command,ignore,high,false,Ignore,Operational replica set status command outside migration scope,exclude_from_scope,P2,,true
+connectionStatus,command,ignore,high,false,Ignore,Operational connection inspection command outside migration scope,exclude_from_scope,P2,,true
+buildInfo,command,ignore,high,false,Ignore,Diagnostic server capability command outside migration scope,exclude_from_scope,P2,,true
+getParameter,command,ignore,high,false,Ignore,Operational server parameter inspection outside migration scope,exclude_from_scope,P2,,true
+hostInfo,command,ignore,high,false,Ignore,Operational host inspection outside migration scope,exclude_from_scope,P2,,true
+ping,command,ignore,high,false,Ignore,Health-check command outside migration scope,exclude_from_scope,P2,,true

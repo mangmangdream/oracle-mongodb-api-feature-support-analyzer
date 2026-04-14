@@ -1,21 +1,12 @@
-# Oracle MongoDB API Feature Support 分析项目
+# Oracle Database API for MongoDB 兼容性分析工具
 
-通过手工点击触发，抓取并分析 Oracle MongoDB API 文档中的 `Feature Support` 明细。
+这是一个基于 Streamlit 的分析应用，用来把 Oracle 官方 `Feature Support` 文档、MongoDB 实际运行画像和迁移复杂度评估放到同一个工作台里。
 
-默认 Oracle 文档链接：
+当前应用包含 3 个主能力：
 
-- https://docs.oracle.com/en/database/oracle/mongodb-api/mgapi/support-mongodb-apis-operations-and-data-types-reference.html
-
-## 功能
-
-- 手工点击按钮后再执行抓取（非自动轮询）
-- 提取 `Feature Support` 相关表格明细
-- 自动归一化支持状态（`Supported` / `Partially Supported` / `Not Supported` / `Other`）
-- 生成统计汇总（数量与占比）
-- 导出明细和统计 CSV，并生成 `report.md`
-- 从文档首页提取文档编号和版本时间，用于辅助判断是否有更新内容
-- 可手工同步 MongoDB 官方文档中的 `command`、`operator`、`stage` 说明，并补充到明细表
-- 可选显示执行日志（抓取重试、解析步骤、保存路径）用于排查问题
+- `文档同步`：抓取 Oracle 官方 `Feature Support` 明细，并可选同步 MongoDB 官方说明补充描述。
+- `MongoDB Usage 分析`：连接目标 MongoDB，读取 `system.profile`，抽取实际使用到的 command、stage、operator、expression，并映射到 Oracle 支持矩阵。
+- `MongoDB 测试工具`：为测试库初始化样本数据、执行预置查询、生成可被当前解析器识别的 `system.profile` 样本。
 
 ## 快速开始
 
@@ -26,54 +17,86 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## 如何启动应用
+默认访问地址：
 
-如果已经安装过依赖，进入项目目录后直接启动：
+- [http://localhost:8501](http://localhost:8501)
 
-```bash
-cd /Users/qizou/aiworkspace/mongodbapi-feature-update
-streamlit run app.py
-```
+## 推荐使用流程
 
-如果是第一次运行，先安装依赖再启动：
+1. 在 `文档同步` 页签中确认 Oracle 文档链接。
+2. 如需补充 MongoDB 官方说明，先点击 `同步 MongoDB 官方说明`。
+3. 点击 `同步 Oracle 官方文档`，生成当前 Oracle `Feature Support` 基线。
+4. 在 `MongoDB Usage 分析` 页签中填入包含默认数据库的 MongoDB URI，例如 `mongodb://user:password@host:27017/oracle_mongo_api_test?authSource=admin`。
+5. 先执行 `测试连接`，确认目标库存在 `system.profile`。
+6. 点击 `分析 system.profile`，查看实际使用 API、Oracle 支持状态、迁移复杂度、热点项和证据样本。
+7. 如需快速准备测试样本，可使用 `MongoDB 测试工具` 页签初始化数据并执行预置查询。
 
-```bash
-cd /Users/qizou/aiworkspace/mongodbapi-feature-update
-pip install -r requirements.txt
-streamlit run app.py
-```
+## 当前功能边界
 
-启动成功后，浏览器会自动打开页面；如果没有自动打开，可以手动访问：
+### 文档同步
 
-- http://localhost:8501
+- 抓取 Oracle 官方 `Feature Support` 表格并归一化支持状态。
+- 从 Oracle 文档首页提取文档编号、版本时间，并与上次缓存比较。
+- 可同步 MongoDB 官方参考说明，并补充到 Oracle 明细中。
+- 支持缓存加载、离线 HTML 报告和 Excel 导出。
 
-浏览器打开后：
+### Usage 分析
 
-1. 在“文档链接与来源”中确认或调整文档链接
-2. 如需更新 MongoDB 官方说明，手动点击 `同步 MongoDB 官方说明`
-3. 点击 `同步 Oracle 官方文档`
-4. 页面展示明细、汇总和补充说明，并自动保存结果到 `outputs/feature_support_时间戳/`
+- 直接连接 MongoDB，数据库名从 URI 路径部分解析，不再单独输入。
+- 读取 `<database>.system.profile`，支持时间窗口和采样上限。
+- 提取 `command`、`stage`、`operator`、`expression` 四类特征。
+- 将观察到的 API 映射到 Oracle `Feature Support` 明细。
+- 基于规则文件评估迁移必要性、迁移复杂度、推荐动作和热点项。
+- 支持按 Oracle 目标版本和部署方式重算有效支持状态。
+- 支持在页面中编辑并保存 `customer_overrides.csv`。
 
-注意：
+### MongoDB 测试工具
 
-- `同步 Oracle 官方文档` 只会使用本地已缓存的 MongoDB 官方说明，不会自动联网更新说明内容
-- 只有点击 `同步 MongoDB 官方说明` 才会从 MongoDB 在线文档抓取并更新说明缓存
+- 测试连接并检测 `system.profile`。
+- 重建测试集合：`customers`、`orders`、`inventory`、`order_metrics`、`order_archive`。
+- 执行覆盖常见 command、stage、operator、expression 的预置查询。
+- 临时提升 profiler 级别并在执行完成后恢复。
 
 ## 输出文件
 
-每次执行会在 `outputs/` 下生成新目录，例如：
+### Oracle 文档同步
+
+每次保存会写入 `outputs/feature_support_<timestamp>/`，主要包含：
 
 - `feature_support_detail.csv`
 - `feature_support_summary.csv`
 - `document_metadata.json`
-- `report.md`
+- `feature_support_report.html`
+- `feature_support_analysis.xlsx`
 
-MongoDB 官方说明缓存文件：
+MongoDB 说明缓存位于：
 
 - `outputs/mongodb_reference_catalog.csv`
 - `outputs/mongodb_reference_metadata.json`
 
+### MongoDB Usage 分析
+
+每次保存会写入 `outputs/mongodb_usage_<timestamp>/`，主要包含：
+
+- `mongodb_usage_feature_detail.csv`
+- `mongodb_usage_feature_summary.csv`
+- `mongodb_usage_metadata.json`
+- `mongodb_migration_complexity_detail.csv`
+- `mongodb_migration_summary.csv`
+- `mongodb_migration_hotspots.csv`
+- `mongodb_migration_excluded_commands.csv`
+- `mongodb_usage_report.html`
+- `mongodb_usage_analysis.xlsx`
+
 ## 代码结构
 
-- `app.py`：Streamlit 页面与手工触发入口
-- `src/oracle_feature_support/fetcher.py`：抓取、表格解析、状态归一化、统计与导出
+- [app.py](/Users/qizou/aiworkspace/mongodbapi-feature-update/app.py)：Streamlit UI、缓存管理、导出和页面编排
+- [src/oracle_feature_support/fetcher.py](/Users/qizou/aiworkspace/mongodbapi-feature-update/src/oracle_feature_support/fetcher.py)：Oracle 文档抓取、表格解析、状态归一化、文档元数据比较
+- [src/oracle_feature_support/mongodb_reference.py](/Users/qizou/aiworkspace/mongodbapi-feature-update/src/oracle_feature_support/mongodb_reference.py)：MongoDB 官方说明同步与补充
+- [src/oracle_feature_support/mongodb_profile_reader.py](/Users/qizou/aiworkspace/mongodbapi-feature-update/src/oracle_feature_support/mongodb_profile_reader.py)：MongoDB 连接测试与 `system.profile` 读取
+- [src/oracle_feature_support/profile_parser.py](/Users/qizou/aiworkspace/mongodbapi-feature-update/src/oracle_feature_support/profile_parser.py)：profile 标准化、特征提取、事件明细整理
+- [src/oracle_feature_support/feature_mapper.py](/Users/qizou/aiworkspace/mongodbapi-feature-update/src/oracle_feature_support/feature_mapper.py)：MongoDB 特征到 Oracle 支持明细的映射
+- [src/oracle_feature_support/migration_rules.py](/Users/qizou/aiworkspace/mongodbapi-feature-update/src/oracle_feature_support/migration_rules.py)：迁移规则和客户覆写加载、校验、保存
+- [src/oracle_feature_support/migration_assessment.py](/Users/qizou/aiworkspace/mongodbapi-feature-update/src/oracle_feature_support/migration_assessment.py)：迁移复杂度、必要性、热点项和排除项评估
+- [src/oracle_feature_support/usage_report.py](/Users/qizou/aiworkspace/mongodbapi-feature-update/src/oracle_feature_support/usage_report.py)：Usage 汇总和分析结果导出
+- [src/oracle_feature_support/mongodb_testkit.py](/Users/qizou/aiworkspace/mongodbapi-feature-update/src/oracle_feature_support/mongodb_testkit.py)：测试数据初始化和预置查询执行

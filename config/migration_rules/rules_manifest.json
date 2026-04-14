@@ -1,0 +1,11 @@
+{
+  "rules_version": "v1.1",
+  "generated_at": "2026-04-12",
+  "description": "MongoDB API migration complexity and necessity baseline focused on application compatibility",
+  "files": [
+    "command_rules.csv",
+    "stage_rules.csv",
+    "operator_rules.csv",
+    "expression_rules.csv"
+  ]
+}

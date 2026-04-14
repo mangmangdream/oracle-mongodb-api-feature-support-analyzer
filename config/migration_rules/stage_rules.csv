@@ -1,0 +1,18 @@
+feature_name,feature_type,migration_scope,scope_confidence,needs_review,default_complexity,complexity_reason,recommended_action,review_priority,notes,enabled
+$match,stage,application_api,high,false,Low,Simple filtering stage,direct_use,P1,,true
+$project,stage,application_api,high,false,Low,Projection stage is usually straightforward,direct_use,P1,,true
+$sort,stage,application_api,high,false,Low,Sorting stage is usually straightforward,direct_use,P1,,true
+$limit,stage,application_api,high,false,Low,Simple limiting stage,direct_use,P2,,true
+$skip,stage,application_api,high,false,Low,Simple pagination stage,direct_use,P2,,true
+$unwind,stage,application_api,high,false,Medium,Array expansion often needs semantic verification,verify_semantics,P1,,true
+$addFields,stage,application_api,high,false,Medium,Derived field logic depends on expressions,verify_semantics,P1,,true
+$set,stage,application_api,high,false,Medium,Derived field logic depends on expressions,verify_semantics,P1,,true
+$unset,stage,application_api,high,false,Medium,Field removal inside pipeline needs validation,verify_semantics,P1,,true
+$count,stage,application_api,high,false,Medium,Count stage semantics need validation,verify_semantics,P1,,true
+$group,stage,application_api,high,false,High,Aggregation grouping logic often needs rewrite,rewrite_aggregation,P0,,true
+$lookup,stage,application_api,high,false,High,Join-like semantics are a common migration hotspot,rewrite_aggregation,P0,,true
+$facet,stage,application_api,high,false,High,Multi-branch pipeline logic is usually costly to migrate,rewrite_aggregation,P0,,true
+$merge,stage,application_api,medium,true,High,Write-back pipeline semantics require dedicated review,manual_assessment,P0,,true
+$out,stage,application_api,medium,true,High,Materialization stage requires dedicated review,manual_assessment,P0,,true
+$bucketAuto,stage,application_api,high,false,High,Auto-bucketing semantics often need redesign,rewrite_aggregation,P1,,true
+$graphLookup,stage,application_api,high,false,Blocker,Recursive graph traversal needs dedicated assessment,migration_blocker_review,P0,,true

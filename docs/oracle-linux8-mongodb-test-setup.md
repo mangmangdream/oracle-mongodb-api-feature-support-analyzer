@@ -137,15 +137,48 @@ print("profile count=" + d.system.profile.countDocuments());
 
 ## 在本项目中测试
 
-在 Streamlit 页面里的 `MongoDB Usage Analysis` 区域填入：
+当前应用有两个相关页签：
 
-- MongoDB URI: `mongodb://127.0.0.1:27017/`
-- Database Name: `oracle_mongo_api_test`
+- `MongoDB 测试工具`
+- `MongoDB Usage 分析`
+
+推荐顺序如下。
+
+### 方式一：直接用应用内测试工具造数
+
+在 `MongoDB 测试工具` 中填入：
+
+- MongoDB URI: `mongodb://127.0.0.1:27017/oracle_mongo_api_test`
+
+然后依次执行：
+
+1. `测试连接`
+2. `初始化测试数据`
+3. `运行测试查询`
+
+注意：
+
+- 该页会写入并覆盖测试集合
+- 执行测试查询时会临时把 profiler 调整到 `level 2`
+- 页面会在完成后恢复 profiler 原始级别
+
+### 方式二：用脚本造数后执行 Usage 分析
+
+在 `MongoDB Usage 分析` 中填入：
+
+- MongoDB URI: `mongodb://127.0.0.1:27017/oracle_mongo_api_test`
 - Start Time: 可留空，或填造数后时间窗口
 - End Time: 可留空
 - Max Sample Limit: `5000`
 
-点击分析后，项目应能读到 `system.profile` 并输出事件明细、功能使用汇总与 Oracle 支持映射结果。
+当前 UI 不再单独输入 `Database Name`，数据库名直接从 URI 路径部分解析。
+
+点击 `分析 system.profile` 后，项目应能读到 `system.profile`，并输出：
+
+- 实际观察到的 MongoDB API
+- Oracle 支持状态映射
+- 迁移必要性与迁移复杂度
+- 热点项与证据样本
 
 ## 清理或关闭 profiler
 
