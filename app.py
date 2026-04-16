@@ -2998,6 +2998,8 @@ def _build_usage_offline_report_html(
             "end_time": str(metadata.get("end_time", "") or ""),
             "profile_count": int(metadata.get("profile_count", 0) or 0),
             "truncated": bool(metadata.get("truncated", False)),
+            "unknown_command_event_count": int(metadata.get("unknown_command_event_count", 0) or 0),
+            "unmapped_feature_count": int(metadata.get("unmapped_feature_count", 0) or 0),
         },
         "oracleTargetVersion": str(target_version or "任意版本"),
         "oracleTargetMode": str(target_mode_display or "任意部署方式"),
@@ -4017,6 +4019,16 @@ with usage_left_panel:
                                     if mongo_usage_trace_enabled:
                                         emit_mongo_trace("[USAGE] Build usage summary")
                                     summary_df = build_usage_summary(assessed_df)
+                                    unknown_command_event_count = (
+                                        int(events_df["command_name"].fillna("").astype(str).eq("unknown").sum())
+                                        if not events_df.empty and "command_name" in events_df.columns
+                                        else 0
+                                    )
+                                    unmapped_feature_count = (
+                                        int(mapped_df["oracle_support_status"].fillna("").astype(str).eq("Unknown").sum())
+                                        if not mapped_df.empty and "oracle_support_status" in mapped_df.columns
+                                        else 0
+                                    )
                                     metadata = {
                                         "database_name": effective_database_name,
                                         "fetched_at": profile_result.fetched_at,
@@ -4024,6 +4036,8 @@ with usage_left_panel:
                                         "end_time": end_time.isoformat() if end_time else "",
                                         "profile_count": len(profile_result.records),
                                         "truncated": profile_result.truncated,
+                                        "unknown_command_event_count": unknown_command_event_count,
+                                        "unmapped_feature_count": unmapped_feature_count,
                                         "rules_version": migration_result.rules_version,
                                         "override_count": migration_result.override_count,
                                         "rules_coverage_rate": migration_result.rules_coverage_rate,
@@ -5204,7 +5218,9 @@ with usage_right_panel:
             f"结束时间: {usage_metadata.get('end_time', '') or '未设置'} | "
             f"规则版本: {usage_metadata.get('rules_version', '') or 'unknown'} | "
             f"客户覆盖: {int(usage_metadata.get('override_count', 0) or 0)} | "
-            f"未分类 API: {int(usage_metadata.get('unclassified_feature_count', 0) or 0)}"
+            f"未分类 API: {int(usage_metadata.get('unclassified_feature_count', 0) or 0)} | "
+            f"未知命令事件: {int(usage_metadata.get('unknown_command_event_count', 0) or 0)} | "
+            f"未映射特征: {int(usage_metadata.get('unmapped_feature_count', 0) or 0)}"
         )
 
         selected_usage_status = [

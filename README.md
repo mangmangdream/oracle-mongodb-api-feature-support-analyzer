@@ -44,7 +44,9 @@ streamlit run app.py
 
 - 直接连接 MongoDB，数据库名从 URI 路径部分解析，不再单独输入。
 - 读取 `<database>.system.profile`，支持时间窗口和采样上限。
+- 兼容 `command`、`query`、`updateobj` 等常见 profile 结构，尽量还原旧版记录中的实际命令语义。
 - 提取 `command`、`stage`、`operator`、`expression` 四类特征。
+- 对未知命令事件和未映射到 Oracle 明细的特征单独计数，避免把“未识别”误判成“未使用”。
 - 将观察到的 API 映射到 Oracle `Feature Support` 明细。
 - 基于规则文件评估迁移必要性、迁移复杂度、推荐动作和热点项。
 - 支持按 Oracle 目标版本和部署方式重算有效支持状态。

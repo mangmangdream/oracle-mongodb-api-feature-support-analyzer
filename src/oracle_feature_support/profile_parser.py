@@ -22,6 +22,26 @@ KNOWN_COMMAND_SEQUENCE = (
     "listIndexes",
 )
 KNOWN_COMMANDS = set(KNOWN_COMMAND_SEQUENCE)
+COMMAND_METADATA_KEYS = {
+    "$db",
+    "lsid",
+    "readConcern",
+    "writeConcern",
+    "ordered",
+    "txnNumber",
+    "stmtId",
+    "stmtIds",
+    "autocommit",
+    "startTransaction",
+    "comment",
+    "let",
+    "maxTimeMS",
+    "cursor",
+    "bypassDocumentValidation",
+    "apiVersion",
+    "apiStrict",
+    "apiDeprecationErrors",
+}
 
 SUPPORTED_STAGES = {
     "$match",
@@ -157,6 +177,10 @@ def _detect_command_name(doc: dict[str, Any], op: str) -> str:
     for key in KNOWN_COMMAND_SEQUENCE:
         if key in doc:
             return key
+    for key in doc:
+        normalized = str(key or "").strip()
+        if normalized and normalized not in COMMAND_METADATA_KEYS and not normalized.startswith("$"):
+            return normalized
     fallback_map = {
         "query": "find",
         "insert": "insert",
@@ -167,22 +191,58 @@ def _detect_command_name(doc: dict[str, Any], op: str) -> str:
     return fallback_map.get(str(op or "").strip(), "unknown")
 
 
+def _normalize_command_doc(record: dict[str, Any], op: str, collection_name: str) -> dict[str, Any]:
+    raw_command = record.get("command")
+    if isinstance(raw_command, dict) and raw_command:
+        return raw_command
+
+    raw_query = record.get("query")
+    query_doc = raw_query if isinstance(raw_query, dict) else {}
+    update_doc = record.get("updateobj") if isinstance(record.get("updateobj"), dict) else {}
+    namespace_target = collection_name or ""
+
+    if op == "query":
+        if any(key in query_doc for key in ("find", "aggregate", "count", "distinct")):
+            return query_doc
+        return {"find": namespace_target, "filter": query_doc}
+
+    if op == "update":
+        return {
+            "update": namespace_target,
+            "updates": [{"q": query_doc, "u": update_doc}],
+        }
+
+    if op == "remove":
+        return {
+            "delete": namespace_target,
+            "deletes": [{"q": query_doc}],
+        }
+
+    if op == "insert":
+        return {"insert": namespace_target}
+
+    if query_doc:
+        return query_doc
+    if update_doc:
+        return update_doc
+    return {}
+
+
 def normalize_profile_records(records: list[dict[str, Any]]) -> list[ProfileEvent]:
     events: list[ProfileEvent] = []
     for record in records:
-        raw_command = record.get("command")
-        if not isinstance(raw_command, dict):
-            raw_command = {}
         ns = str(record.get("ns", "") or "")
         db_name, collection_name = _split_namespace(ns)
         if not db_name:
             db_name = str(record.get("db", "") or "")
+        op = str(record.get("op", "") or "")
+        raw_command = _normalize_command_doc(record, op, collection_name)
         event = ProfileEvent(
             ts=_to_iso(record.get("ts")),
             db_name=db_name,
             collection_name=collection_name,
-            op=str(record.get("op", "") or ""),
-            command_name=_detect_command_name(raw_command, str(record.get("op", "") or "")),
+            op=op,
+            command_name=_detect_command_name(raw_command, op),
             command_doc=raw_command,
             duration_ms=_to_int(record.get("millis")),
             docs_examined=_to_int(record.get("docsExamined")),
@@ -229,12 +289,9 @@ def _walk_expression(
     if isinstance(value, dict):
         for key, child in value.items():
             child_path = f"{path}.{key}" if path else key
-            if key in SUPPORTED_EXPRESSIONS:
-                _emit_feature(target, event, "expression", key, child_path, child)
             if key.startswith("$"):
-                _walk_expression(child, child_path, event, target)
-            else:
-                _walk_expression(child, child_path, event, target)
+                _emit_feature(target, event, "expression", key, child_path, child)
+            _walk_expression(child, child_path, event, target)
     elif isinstance(value, list):
         for index, item in enumerate(value):
             _walk_expression(item, f"{path}[{index}]", event, target)
@@ -253,7 +310,7 @@ def _walk_operator(
                 _emit_feature(target, event, "operator", key, child_path, child)
                 _walk_expression(child, child_path, event, target)
                 continue
-            if key in SUPPORTED_OPERATORS:
+            if key.startswith("$"):
                 _emit_feature(target, event, "operator", key, child_path, child)
             _walk_operator(child, child_path, event, target)
     elif isinstance(value, list):
@@ -306,7 +363,7 @@ def _extract_aggregate_features(event: ProfileEvent, target: list[FeatureUsage])
         stage_name = next(iter(stage))
         stage_body = stage.get(stage_name)
         stage_path = f"command.pipeline[{index}].{stage_name}"
-        if stage_name in SUPPORTED_STAGES:
+        if stage_name.startswith("$"):
             _emit_feature(target, event, "stage", stage_name, stage_path, stage_body)
         if stage_name == "$match":
             _walk_operator(stage_body, stage_path, event, target)

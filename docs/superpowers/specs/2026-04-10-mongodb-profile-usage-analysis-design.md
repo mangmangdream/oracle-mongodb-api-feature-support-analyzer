@@ -138,7 +138,7 @@ The current parser extracts four feature classes:
 - `operator`
 - `expression`
 
-### Recognized commands
+### Explicitly recognized commands
 
 - `find`
 - `aggregate`
@@ -151,6 +151,8 @@ The current parser extracts four feature classes:
 - `createIndexes`
 - `dropIndexes`
 - `listIndexes`
+
+When the command is not in the explicit list, the parser now falls back to the first non-metadata top-level key in the command document. This keeps unknown or newly introduced commands visible instead of collapsing them into silent misses.
 
 ### Recognized stages
 
@@ -238,7 +240,15 @@ The implemented extractor walks:
 - nested `$lookup.pipeline`
 - nested `$facet` pipelines
 
-Unrecognized `$` keys are ignored to keep the output stable.
+When the parser encounters unknown `$` stage, operator, or expression keys in those traversal paths, it now keeps them in the extracted usage dataset. They may still remain `Unknown` at the Oracle mapping stage, but they are no longer silently discarded.
+
+For older or alternate profile shapes, the parser also normalizes:
+
+- `query` records into `find`-style command docs
+- `update` records into `update.updates[].{q,u}`
+- `remove` records into `delete.deletes[].q`
+
+This improves coverage for profile samples where `command` is absent but `query` / `updateobj` still carry the useful evidence.
 
 ## Oracle Mapping Rules
 
@@ -255,7 +265,10 @@ The mapped output uses:
 - `Not Supported`
 - `Unknown`
 
-If no Oracle row matches, the feature stays `Unknown`.
+If no Oracle row matches, the feature stays `Unknown`. The current metadata also records:
+
+- `unknown_command_event_count`
+- `unmapped_feature_count`
 
 ## Current UI Surfaces
 
