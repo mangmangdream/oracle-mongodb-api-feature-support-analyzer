@@ -275,32 +275,60 @@ The assessment engine is ahead of the UI in several places:
 - `rules_coverage_rate`, fallback classifications, hotspots, and excluded items are generated, but not all of them have dedicated UI surfaces
 - the engine can explain why a row was classified a certain way, but the main workflow still emphasizes outcome over rationale
 
+## New Direction
+
+The migration assessment design now follows the same two-track direction as the usage-analysis layer:
+
+- `usage-hardening`
+  - remains the default path
+  - keeps migration assessment centered on observed profile-derived APIs
+  - improves trust by exposing fallback classifications, confidence signals, and richer rationale in the current workflow
+- `collector-lite`
+  - remains an experiment path
+  - extends assessment inputs with lightweight environment, topology, and object metadata
+  - is intended to test whether richer evidence changes migration necessity, complexity, or priority outcomes in a meaningful way
+
+Assessment logic should continue to optimize for interpretability on the default path. Any new evidence source from `collector-lite` must justify itself by improving explanation quality, confidence, or prioritization accuracy.
+
 ## Delivery Roadmap
 
 ### P0
 
-Make the current assessment operational for delivery teams:
+`usage-hardening`:
 
 - expose full override editing in the baseline table
 - add dedicated views for hotspots, excluded items, and fallback-classified APIs
 - derive migration work packages from `recommended_action`, scope, and complexity
 
+`collector-lite`:
+
+- incorporate preflight and structural metadata into the assessment context
+- test whether administrative-looking APIs can be classified more accurately when deployment and object metadata are available
+- verify whether additional evidence improves hotspot explanation rather than only adding more fields
+
 ### P1
 
-Make the assessment easier to trust and validate:
+`usage-hardening`:
 
 - add confidence and sampling sufficiency scoring
 - surface `priority_reason`, `complexity_adjustment_reason`, `scope_confidence`, and `needs_review`
 - support richer evidence inspection, including multiple samples for the same API
 
+`collector-lite`:
+
+- evaluate sharding and topology evidence as migration-priority modifiers
+- distinguish directly observed behavior from metadata-derived inference in the assessment output
+- test whether profiler gaps should trigger explicit low-confidence or alternate-evidence handling
+
 ### P2
 
-Make the assessment useful across the whole migration program:
+Make the assessment useful across the whole migration program and converge the tracks:
 
 - compare saved runs over time
 - compare environments
 - compare Oracle target scenarios
 - show how rules and customer overrides changed the final migration conclusions
+- decide whether `collector-lite` evidence should remain optional, merge into the default path, or be dropped
 
 ## Risks And Constraints
 

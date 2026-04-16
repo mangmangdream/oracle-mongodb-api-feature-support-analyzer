@@ -98,25 +98,58 @@ MongoDB 说明缓存位于：
 
 ## 交付路线图
 
-应用的核心目标不是只展示兼容性明细，而是帮助交付团队把 MongoDB 到 Oracle Database API for MongoDB 的迁移评估转成可执行工作项。当前推荐路线如下。
+应用的核心目标不是只展示兼容性明细，而是帮助交付团队把 MongoDB 到 Oracle Database API for MongoDB 的迁移评估转成可执行工作项。
+
+当前设计方向改为双轨演进：
+
+- `usage-hardening`
+  - 当前默认主线
+  - 在现有 `system.profile` 分析模型上继续增强，优先提升解析覆盖率、未知项显式暴露、结论置信度和交付视图完整度
+- `collector-lite`
+  - 当前实验线
+  - 引入轻量级多源证据采集，验证实例级、数据库级、集合级元数据是否能显著提升迁移判断质量
+
+两条路线不作为长期并行产品维护。原则是先在实验线验证收益，再决定是否把 `collector-lite` 的有效能力并回主线。
 
 ### P0
 
+主线 `usage-hardening`：
+
+- 补全 profile 解析覆盖率，兼容更多 `system.profile` 结构
+- 显式暴露未知命令、未映射特征、fallback 分类结果
 - 补全覆盖规则编辑器，支持 `override_scope`、`override_action`
 - 为热点项、排除项、未分类 API 提供独立表格视图
 - 把分析结果整理为迁移工作包，如查询改写、聚合改写、语义验证、索引复核、阻塞项排查
 
+实验线 `collector-lite`：
+
+- 增加实例级 preflight，如 `ping`、`hello`、`buildInfo`、`connectionStatus`
+- 增加基础结构采集，如 `listDatabases`、`dbStats`、`listCollections`、`collStats`、`listIndexes`
+- 评估这些额外证据对迁移复杂度和优先级判断的增益
+
 ### P1
+
+主线 `usage-hardening`：
 
 - 增加采样覆盖度和结论置信度评分
 - 标记需要补采样的低置信度 API
 - 为复杂度调整、优先级排序、范围判断提供更完整的解释字段展示
+- 支持更丰富的证据展示，而不是只保留单条样本
+
+实验线 `collector-lite`：
+
+- 引入分片和部署结构感知，验证 `shardingState`、`listShards`、`balancerStatus`、`getShardMap` 的价值
+- 统一 workload 证据和结构证据的置信度表达
+- 评估是否需要在 profiler 不充分时增加日志回退证据
 
 ### P2
+
+路线收敛与程序化能力：
 
 - 支持多次分析结果对比
 - 支持不同环境和不同 Oracle 目标版本对比
 - 支持跟踪规则调整和客户覆盖前后的评估变化
+- 基于实验结果决定是否把 `collector-lite` 的部分能力合并进主线
 
 ## 代码结构
 

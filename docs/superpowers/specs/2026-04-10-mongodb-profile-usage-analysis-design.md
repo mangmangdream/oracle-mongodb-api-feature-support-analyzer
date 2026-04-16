@@ -317,32 +317,62 @@ The main remaining gaps are not in the read or parse pipeline. They are in workf
 - key explanation fields such as confidence, review flags, and priority reasons are computed but not fully surfaced in the main workflow
 - the app still treats each analysis as a snapshot and does not compare runs over time
 
+## New Direction
+
+The design direction is now explicitly split into two tracks:
+
+- `usage-hardening`
+  - the default implementation path
+  - keeps `system.profile` as the primary evidence source
+  - focuses on parser coverage, unknown-item visibility, confidence scoring, and delivery-oriented UI surfaces
+- `collector-lite`
+  - an experiment track rather than the default product path
+  - adds lightweight environment and metadata collection around the existing usage analysis
+  - is intended to validate whether multi-source evidence materially improves migration conclusions
+
+The intent is not to maintain two permanent products. The expected path is to continue improving the `usage-hardening` branch while using `collector-lite` to prove or disprove specific additions before merging them back selectively.
+
 ## Delivery-Focused Roadmap
 
 ### P0
 
-Turn usage analysis into execution-ready migration input:
+`usage-hardening`:
 
 - complete the override editor with `override_scope` and `override_action`
+- continue widening parser compatibility for legacy and alternate profile record shapes
+- keep unknown commands and unmapped features visible and queryable
 - add explicit hotspots, excluded-items, and fallback-rule views
 - group observed APIs into delivery work packages such as query rewrite, aggregation rewrite, semantic validation, index review, and blocker investigation
 
+`collector-lite`:
+
+- add instance preflight commands such as `ping`, `hello`, `buildInfo`, and `connectionStatus`
+- add basic structural collection for `listDatabases`, `dbStats`, `listCollections`, `collStats`, and `listIndexes`
+- measure whether these facts improve migration scope and priority explanations
+
 ### P1
 
-Improve trustworthiness of the assessment:
+`usage-hardening`:
 
 - add sampling coverage scoring
 - add confidence labels and low-confidence warnings
 - preserve and render more than one evidence sample per API when needed
 - surface `complexity_adjustment_reason`, `priority_reason`, `scope_confidence`, and `needs_review` in the UI
 
+`collector-lite`:
+
+- add sharding-aware metadata collection such as `shardingState`, `listShards`, `balancerStatus`, and `getShardMap`
+- unify workload evidence and structural evidence into one confidence model
+- evaluate whether profiler gaps require a log-based fallback path
+
 ### P2
 
-Support ongoing migration programs rather than one-off analysis:
+Support convergence and program-level analysis:
 
 - compare two saved runs and highlight new, removed, or risk-increased APIs
 - compare different environments such as test, UAT, and production
 - compare Oracle target versions and deployment modes side by side
+- decide which `collector-lite` capabilities, if any, should merge into the default `usage-hardening` path
 
 ## Risks And Constraints
 
