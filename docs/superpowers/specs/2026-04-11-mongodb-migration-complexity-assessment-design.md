@@ -209,6 +209,10 @@ This tab shows the Oracle catalog baseline enriched with migration classificatio
 - inline editing for override complexity and override reason
 - saving overrides back to `customer_overrides.csv`
 
+Current limitation:
+
+- `override_scope` and `override_action` are supported by the backend schema and rule engine, but the current editor does not expose them yet
+
 ### `实际使用 API`
 
 This tab focuses on observed workload APIs and currently exposes:
@@ -221,6 +225,11 @@ This tab focuses on observed workload APIs and currently exposes:
 - effective complexity
 - migration priority
 - evidence samples for the selected row
+
+Current limitations:
+
+- hotspots and excluded operational items are not yet rendered as first-class tabs or tables
+- explanation fields such as `priority_reason`, `complexity_adjustment_reason`, `scope_confidence`, and `needs_review` are not fully surfaced in the main table workflow
 
 ## Output Artifacts
 
@@ -257,6 +266,41 @@ The current run metadata and summary views expose:
 - HTML and Excel are the current exported formats
 - backend override schema is broader than the current UI editor
 - support status is recomputed dynamically against selected Oracle target version and deployment mode
+
+## Remaining Gaps
+
+The assessment engine is ahead of the UI in several places:
+
+- backend support already exists for `override_scope` and `override_action`, but the editor saves only complexity and reason
+- `rules_coverage_rate`, fallback classifications, hotspots, and excluded items are generated, but not all of them have dedicated UI surfaces
+- the engine can explain why a row was classified a certain way, but the main workflow still emphasizes outcome over rationale
+
+## Delivery Roadmap
+
+### P0
+
+Make the current assessment operational for delivery teams:
+
+- expose full override editing in the baseline table
+- add dedicated views for hotspots, excluded items, and fallback-classified APIs
+- derive migration work packages from `recommended_action`, scope, and complexity
+
+### P1
+
+Make the assessment easier to trust and validate:
+
+- add confidence and sampling sufficiency scoring
+- surface `priority_reason`, `complexity_adjustment_reason`, `scope_confidence`, and `needs_review`
+- support richer evidence inspection, including multiple samples for the same API
+
+### P2
+
+Make the assessment useful across the whole migration program:
+
+- compare saved runs over time
+- compare environments
+- compare Oracle target scenarios
+- show how rules and customer overrides changed the final migration conclusions
 
 ## Risks And Constraints
 

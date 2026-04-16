@@ -50,6 +50,12 @@ streamlit run app.py
 - 支持按 Oracle 目标版本和部署方式重算有效支持状态。
 - 支持在页面中编辑并保存 `customer_overrides.csv`。
 
+当前限制：
+
+- 覆盖规则编辑器暂时只开放 `override_complexity` 和 `override_reason`，`override_scope` / `override_action` 仍需补齐前端入口。
+- 热点项和排除项已参与导出，但 UI 里还没有完整独立视图。
+- 采样覆盖度、置信度、结果对比等交付型能力尚未实现。
+
 ### MongoDB 测试工具
 
 - 测试连接并检测 `system.profile`。
@@ -87,6 +93,28 @@ MongoDB 说明缓存位于：
 - `mongodb_migration_excluded_commands.csv`
 - `mongodb_usage_report.html`
 - `mongodb_usage_analysis.xlsx`
+
+## 交付路线图
+
+应用的核心目标不是只展示兼容性明细，而是帮助交付团队把 MongoDB 到 Oracle Database API for MongoDB 的迁移评估转成可执行工作项。当前推荐路线如下。
+
+### P0
+
+- 补全覆盖规则编辑器，支持 `override_scope`、`override_action`
+- 为热点项、排除项、未分类 API 提供独立表格视图
+- 把分析结果整理为迁移工作包，如查询改写、聚合改写、语义验证、索引复核、阻塞项排查
+
+### P1
+
+- 增加采样覆盖度和结论置信度评分
+- 标记需要补采样的低置信度 API
+- 为复杂度调整、优先级排序、范围判断提供更完整的解释字段展示
+
+### P2
+
+- 支持多次分析结果对比
+- 支持不同环境和不同 Oracle 目标版本对比
+- 支持跟踪规则调整和客户覆盖前后的评估变化
 
 ## 代码结构
 

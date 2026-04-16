@@ -295,6 +295,42 @@ Compared with the original design, Markdown export is no longer part of the curr
 - Oracle target version and deployment mode can be adjusted after a run
 - usage analysis includes cache reload, offline report generation, and evidence drill-down
 
+## Current Gaps
+
+The main remaining gaps are not in the read or parse pipeline. They are in workflow completeness for delivery use:
+
+- the override editor in the UI still exposes only `override_complexity` and `override_reason`
+- hotspots and excluded items are exported, but not yet promoted to first-class UI views
+- key explanation fields such as confidence, review flags, and priority reasons are computed but not fully surfaced in the main workflow
+- the app still treats each analysis as a snapshot and does not compare runs over time
+
+## Delivery-Focused Roadmap
+
+### P0
+
+Turn usage analysis into execution-ready migration input:
+
+- complete the override editor with `override_scope` and `override_action`
+- add explicit hotspots, excluded-items, and fallback-rule views
+- group observed APIs into delivery work packages such as query rewrite, aggregation rewrite, semantic validation, index review, and blocker investigation
+
+### P1
+
+Improve trustworthiness of the assessment:
+
+- add sampling coverage scoring
+- add confidence labels and low-confidence warnings
+- preserve and render more than one evidence sample per API when needed
+- surface `complexity_adjustment_reason`, `priority_reason`, `scope_confidence`, and `needs_review` in the UI
+
+### P2
+
+Support ongoing migration programs rather than one-off analysis:
+
+- compare two saved runs and highlight new, removed, or risk-increased APIs
+- compare different environments such as test, UAT, and production
+- compare Oracle target versions and deployment modes side by side
+
 ## Risks And Constraints
 
 - results only reflect the sampled profile window
