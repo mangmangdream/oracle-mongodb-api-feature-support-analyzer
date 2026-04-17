@@ -25,6 +25,7 @@ From the usage-analysis pipeline:
 - `max_duration_ms`
 - timestamps
 - sample path and sample value
+- evidence attribution (`database_level` or `instance_level`)
 
 ### 2. Oracle support mapping
 
@@ -246,9 +247,16 @@ The current run metadata and summary views expose:
 - `override_count`
 - `rules_coverage_rate`
 - `unclassified_feature_count`
+- `requested_strategy`
+- `resolved_strategy`
+- `effective_source`
+- `fallback_chain`
+- `database_attribution`
 - workload counts by complexity
 - hotspot counts
 - excluded operational items
+
+When the workload source resolves to `serverStatus.metrics`, the assessment layer treats the result as instance-level evidence. These rows remain assessable for support and complexity, but they are not treated as precise database-level workload attribution.
 
 ## Important Deltas From The Original Plan
 
@@ -257,6 +265,7 @@ The current run metadata and summary views expose:
 - HTML and Excel are the current exported formats
 - backend override schema is broader than the current UI editor
 - support status is recomputed dynamically against selected Oracle target version and deployment mode
+- workload collection now uses short-circuit source selection (`system.profile -> global log -> serverStatus.metrics`) instead of combining multiple workload sources in one run
 
 ## Risks And Constraints
 
@@ -264,3 +273,6 @@ The current run metadata and summary views expose:
 - some APIs have ambiguous ownership between application logic and operational tooling
 - support-based lowering for `Supported` features is intentionally optimistic and should still be validated against customer semantics
 - hotspot ranking depends on observed profile samples, so poor sampling will skew priorities
+- assessment confidence should depend on evidence source quality, not only on observed counts
+- `LOG_ONLY` and `METRICS_ONLY` style collection should be treated as lower-fidelity evidence than `PROFILE_ONLY`
+- when collector-lite introduces multi-strategy collection, the assessment output must preserve `requested_strategy`, `effective_source`, and source-derived confidence
