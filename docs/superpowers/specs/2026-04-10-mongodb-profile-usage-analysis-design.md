@@ -12,15 +12,17 @@ This means the usage analysis flow is no longer a standalone report-only feature
 
 ## Current User Flow
 
-1. User first syncs Oracle official documentation in the `文档同步` tab.
+1. User first syncs Oracle official documentation in the `API 基准` tab.
 2. User opens `MongoDB Usage 分析`.
-3. User enters a MongoDB URI that already includes the target database in the path.
+3. User enters a MongoDB URI and may optionally fill a `Database` input.
 4. User optionally fills a start time, end time, and sample limit.
-5. User can click `测试连接` to confirm the database is reachable and whether `system.profile` exists.
-6. User clicks `分析 system.profile`.
-7. The app reads profile records, normalizes them, extracts features, maps them to Oracle support data, applies migration rules, and renders the result.
-8. User can switch Oracle target version and deployment mode to recompute effective Oracle support status and migration complexity without rereading MongoDB.
-9. User can export HTML and Excel artifacts or load a previous cached run.
+5. User can click `测试连接` to confirm the instance is reachable, inspect available non-system databases, and probe `system.profile` / log / metrics permissions.
+6. User clicks `分析`.
+7. The app selects a single workload evidence source using short-circuit priority: `system.profile -> global log -> serverStatus.metrics`.
+8. Once the first usable workload source is found, the app stops and does not collect lower-priority workload sources for the same run.
+9. The app extracts features, maps them to Oracle support data, applies migration rules, and renders the result.
+10. User can switch Oracle target version and deployment mode to recompute effective Oracle support status and migration complexity without rereading MongoDB.
+11. User can export HTML and Excel artifacts or load a previous cached run.
 
 ## Architecture
 
@@ -44,19 +46,38 @@ The implemented flow is split across these modules:
 The current UI accepts:
 
 - `MongoDB URI`
+- `Database（可选）`
 - `开始时间（可选）`
 - `结束时间（可选）`
 - `最大采样条数`
+- `采集策略`
 - `显示日志`
 
-The database name is derived from the URI path and is not entered separately anymore. If the URI path does not include a database, the UI rejects the request.
+If `Database` is filled, the run targets only that database. If `Database` is empty, the app enumerates all non-system databases and analyzes them as the target scope.
 
-## `system.profile` Read Rules
+The current strategy options are:
+
+- `PROFILE_ONLY`
+- `AUTO`
+- `LOG_ONLY`
+- `METRICS_ONLY`
+
+`AUTO` is not a mixed-source mode. It is a short-circuit resolver:
+
+1. try `system.profile`
+2. if no usable workload evidence, try `global log`
+3. if still no usable workload evidence, try `serverStatus.metrics`
+
+Once one source produces usable workload evidence, lower-priority sources are not collected in the same run.
+
+## Workload Source Rules
+
+### `system.profile`
 
 The current implementation:
 
 - connects directly to the target MongoDB URI
-- derives the target database from the URI path
+- targets either the selected database or each enumerated non-system database
 - reads only from `<database>.system.profile`
 - supports optional `ts` range filtering
 - sorts by `ts` descending
@@ -76,6 +97,30 @@ The current implementation:
   - `errMsg`
 
 If `system.profile` does not exist, the app returns a user-visible error or warning. If the query hits the sampling limit, the UI warns that the result may be truncated.
+
+### `global log`
+
+If `system.profile` is not usable for the current run, the app may fall back to `getLog("global")`.
+
+The log path is treated as a lower-priority workload source because:
+
+- it is slower
+- it depends on the current log window
+- it is less reliable than `system.profile`
+
+If log parsing yields usable workload evidence, the app stops and does not continue to `serverStatus.metrics`.
+
+### `serverStatus.metrics`
+
+`serverStatus.metrics` is the last-resort workload source.
+
+It is only used when both `system.profile` and `global log` fail to provide usable workload evidence for the current run.
+
+This source is modeled as instance-level evidence:
+
+- it does not provide precise database attribution
+- it is rendered separately from database-level usage summaries
+- it does not participate in `Database` filtering
 
 ## Data Model
 
@@ -270,7 +315,29 @@ If no Oracle row matches, the feature stays `Unknown`. The current metadata also
 - `unknown_command_event_count`
 - `unmapped_feature_count`
 
+## Baseline Dependency
+
+Usage analysis still evaluates observed workload against the Oracle compatibility main table. The new MongoDB API baseline does not replace the usage-assessment path.
+
+The current split is:
+
+- `API 基准` page
+  - primary table: `MongoDB API baseline + Oracle compatibility mapping`
+  - auxiliary Oracle view: `Feature Support 明细与覆盖规则`
+- `MongoDB Usage 分析` page
+  - keeps using Oracle-compatible support rows plus migration rules for support/complexity assessment
+  - only shows related baseline rows as reference, not the full baseline table
+
+This keeps migration assessment centered on Oracle compatibility while allowing the app to expose MongoDB APIs that are not covered by the Oracle main table.
+
 ## Current UI Surfaces
+
+The current usage page is organized into:
+
+- `采集概览`
+- `实际使用 API`
+
+`采集概览` shows instance-level and database-level collection metadata, including the requested strategy, resolved strategy, effective source, fallback chain, and database scope.
 
 After a successful run, the right-side panel renders:
 
@@ -278,8 +345,8 @@ After a successful run, the right-side panel renders:
 - Oracle target version and deployment controls
 - usage summary cards
 - filter controls
-- `API 基准` tab
 - `实际使用 API` tab
+- related baseline comparison inside `实际使用 API`
 - evidence samples for the selected workload row
 - HTML and Excel export actions
 - cache load and cache clear actions

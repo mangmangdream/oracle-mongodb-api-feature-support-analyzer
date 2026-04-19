@@ -25,6 +25,7 @@ From the usage-analysis pipeline:
 - `max_duration_ms`
 - timestamps
 - sample path and sample value
+- evidence attribution (`database_level` or `instance_level`)
 
 ### 2. Oracle support mapping
 
@@ -34,6 +35,8 @@ From the synced Oracle `Feature Support` detail dataset:
 - `oracle_support_since`
 - `oracle_category`
 - `oracle_feature`
+
+The app now also builds a separate `MongoDB API baseline + Oracle compatibility mapping` for the `API 基准` page. That baseline is a catalog and reference surface. The migration assessment engine still consumes Oracle-compatible support rows from the usage-analysis path and does not switch to the baseline as its primary scoring input.
 
 ### 3. Built-in rules
 
@@ -193,19 +196,20 @@ The resulting usage detail dataset includes:
 
 ## Current UI Surfaces
 
-Migration assessment is rendered inside `MongoDB Usage 分析` and is split into two tabs:
+Migration assessment is rendered primarily inside `MongoDB Usage 分析`, while the `API 基准` page exposes the full MongoDB baseline and its Oracle compatibility mapping.
 
-- `API 基准`
+Within `MongoDB Usage 分析`, the current right-side panel is organized as:
+
+- `采集概览`
 - `实际使用 API`
 
-### `API 基准`
+### `API 基准` page
 
-This tab shows the Oracle catalog baseline enriched with migration classification. It currently supports:
+The separate `API 基准` page now shows:
 
-- total API counts and observed-in-profile counts
-- effective migration necessity
-- effective complexity
-- observed usage counts and command contexts
+- a full MongoDB API baseline
+- Oracle compatibility mapping attached to each MongoDB API
+- Oracle `Feature Support` main-table browsing under `Feature Support 明细与覆盖规则`
 - inline editing for override complexity and override reason
 - saving overrides back to `customer_overrides.csv`
 
@@ -213,11 +217,12 @@ Current limitation:
 
 - `override_scope` and `override_action` are supported by the backend schema and rule engine, but the current editor does not expose them yet
 
-### `实际使用 API`
+### `MongoDB Usage 分析`
 
-This tab focuses on observed workload APIs and currently exposes:
+The usage page still focuses on observed workload APIs. It currently supports:
 
 - actual used API counts
+- related baseline comparison against the Oracle-compatible catalog rows
 - high-complexity counts
 - hotspot counts
 - migration necessity
@@ -255,9 +260,16 @@ The current run metadata and summary views expose:
 - `override_count`
 - `rules_coverage_rate`
 - `unclassified_feature_count`
+- `requested_strategy`
+- `resolved_strategy`
+- `effective_source`
+- `fallback_chain`
+- `database_attribution`
 - workload counts by complexity
 - hotspot counts
 - excluded operational items
+
+When the workload source resolves to `serverStatus.metrics`, the assessment layer treats the result as instance-level evidence. These rows remain assessable for support and complexity, but they are not treated as precise database-level workload attribution.
 
 ## Important Deltas From The Original Plan
 
@@ -266,6 +278,7 @@ The current run metadata and summary views expose:
 - HTML and Excel are the current exported formats
 - backend override schema is broader than the current UI editor
 - support status is recomputed dynamically against selected Oracle target version and deployment mode
+- workload collection now uses short-circuit source selection (`system.profile -> global log -> serverStatus.metrics`) instead of combining multiple workload sources in one run
 
 ## Remaining Gaps
 
@@ -336,3 +349,6 @@ Make the assessment useful across the whole migration program and converge the t
 - some APIs have ambiguous ownership between application logic and operational tooling
 - support-based lowering for `Supported` features is intentionally optimistic and should still be validated against customer semantics
 - hotspot ranking depends on observed profile samples, so poor sampling will skew priorities
+- assessment confidence should depend on evidence source quality, not only on observed counts
+- `LOG_ONLY` and `METRICS_ONLY` style collection should be treated as lower-fidelity evidence than `PROFILE_ONLY`
+- when collector-lite introduces multi-strategy collection, the assessment output must preserve `requested_strategy`, `effective_source`, and source-derived confidence
