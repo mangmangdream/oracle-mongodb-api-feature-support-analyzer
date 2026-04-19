@@ -25,6 +25,7 @@ From the usage-analysis pipeline:
 - `max_duration_ms`
 - timestamps
 - sample path and sample value
+- evidence attribution (`database_level` or `instance_level`)
 
 ### 2. Oracle support mapping
 
@@ -34,6 +35,8 @@ From the synced Oracle `Feature Support` detail dataset:
 - `oracle_support_since`
 - `oracle_category`
 - `oracle_feature`
+
+The app now also builds a separate `MongoDB API baseline + Oracle compatibility mapping` for the `API 基准` page. That baseline is a catalog and reference surface. The migration assessment engine still consumes Oracle-compatible support rows from the usage-analysis path and does not switch to the baseline as its primary scoring input.
 
 ### 3. Built-in rules
 
@@ -193,27 +196,33 @@ The resulting usage detail dataset includes:
 
 ## Current UI Surfaces
 
-Migration assessment is rendered inside `MongoDB Usage 分析` and is split into two tabs:
+Migration assessment is rendered primarily inside `MongoDB Usage 分析`, while the `API 基准` page exposes the full MongoDB baseline and its Oracle compatibility mapping.
 
-- `API 基准`
+Within `MongoDB Usage 分析`, the current right-side panel is organized as:
+
+- `采集概览`
 - `实际使用 API`
 
-### `API 基准`
+### `API 基准` page
 
-This tab shows the Oracle catalog baseline enriched with migration classification. It currently supports:
+The separate `API 基准` page now shows:
 
-- total API counts and observed-in-profile counts
-- effective migration necessity
-- effective complexity
-- observed usage counts and command contexts
+- a full MongoDB API baseline
+- Oracle compatibility mapping attached to each MongoDB API
+- Oracle `Feature Support` main-table browsing under `Feature Support 明细与覆盖规则`
 - inline editing for override complexity and override reason
 - saving overrides back to `customer_overrides.csv`
 
-### `实际使用 API`
+Current limitation:
 
-This tab focuses on observed workload APIs and currently exposes:
+- `override_scope` and `override_action` are supported by the backend schema and rule engine, but the current editor does not expose them yet
+
+### `MongoDB Usage 分析`
+
+The usage page still focuses on observed workload APIs. It currently supports:
 
 - actual used API counts
+- related baseline comparison against the Oracle-compatible catalog rows
 - high-complexity counts
 - hotspot counts
 - migration necessity
@@ -221,6 +230,11 @@ This tab focuses on observed workload APIs and currently exposes:
 - effective complexity
 - migration priority
 - evidence samples for the selected row
+
+Current limitations:
+
+- hotspots and excluded operational items are not yet rendered as first-class tabs or tables
+- explanation fields such as `priority_reason`, `complexity_adjustment_reason`, `scope_confidence`, and `needs_review` are not fully surfaced in the main table workflow
 
 ## Output Artifacts
 
@@ -246,9 +260,16 @@ The current run metadata and summary views expose:
 - `override_count`
 - `rules_coverage_rate`
 - `unclassified_feature_count`
+- `requested_strategy`
+- `resolved_strategy`
+- `effective_source`
+- `fallback_chain`
+- `database_attribution`
 - workload counts by complexity
 - hotspot counts
 - excluded operational items
+
+When the workload source resolves to `serverStatus.metrics`, the assessment layer treats the result as instance-level evidence. These rows remain assessable for support and complexity, but they are not treated as precise database-level workload attribution.
 
 ## Important Deltas From The Original Plan
 
@@ -257,6 +278,70 @@ The current run metadata and summary views expose:
 - HTML and Excel are the current exported formats
 - backend override schema is broader than the current UI editor
 - support status is recomputed dynamically against selected Oracle target version and deployment mode
+- workload collection now uses short-circuit source selection (`system.profile -> global log -> serverStatus.metrics`) instead of combining multiple workload sources in one run
+
+## Remaining Gaps
+
+The assessment engine is ahead of the UI in several places:
+
+- backend support already exists for `override_scope` and `override_action`, but the editor saves only complexity and reason
+- `rules_coverage_rate`, fallback classifications, hotspots, and excluded items are generated, but not all of them have dedicated UI surfaces
+- the engine can explain why a row was classified a certain way, but the main workflow still emphasizes outcome over rationale
+
+## New Direction
+
+The migration assessment design now follows the same two-track direction as the usage-analysis layer:
+
+- `usage-hardening`
+  - remains the default path
+  - keeps migration assessment centered on observed profile-derived APIs
+  - improves trust by exposing fallback classifications, confidence signals, and richer rationale in the current workflow
+- `collector-lite`
+  - remains an experiment path
+  - extends assessment inputs with lightweight environment, topology, and object metadata
+  - is intended to test whether richer evidence changes migration necessity, complexity, or priority outcomes in a meaningful way
+
+Assessment logic should continue to optimize for interpretability on the default path. Any new evidence source from `collector-lite` must justify itself by improving explanation quality, confidence, or prioritization accuracy.
+
+## Delivery Roadmap
+
+### P0
+
+`usage-hardening`:
+
+- expose full override editing in the baseline table
+- add dedicated views for hotspots, excluded items, and fallback-classified APIs
+- derive migration work packages from `recommended_action`, scope, and complexity
+
+`collector-lite`:
+
+- incorporate preflight and structural metadata into the assessment context
+- test whether administrative-looking APIs can be classified more accurately when deployment and object metadata are available
+- verify whether additional evidence improves hotspot explanation rather than only adding more fields
+
+### P1
+
+`usage-hardening`:
+
+- add confidence and sampling sufficiency scoring
+- surface `priority_reason`, `complexity_adjustment_reason`, `scope_confidence`, and `needs_review`
+- support richer evidence inspection, including multiple samples for the same API
+
+`collector-lite`:
+
+- evaluate sharding and topology evidence as migration-priority modifiers
+- distinguish directly observed behavior from metadata-derived inference in the assessment output
+- test whether profiler gaps should trigger explicit low-confidence or alternate-evidence handling
+
+### P2
+
+Make the assessment useful across the whole migration program and converge the tracks:
+
+- compare saved runs over time
+- compare environments
+- compare Oracle target scenarios
+- show how rules and customer overrides changed the final migration conclusions
+- decide whether `collector-lite` evidence should remain optional, merge into the default path, or be dropped
 
 ## Risks And Constraints
 
@@ -264,3 +349,6 @@ The current run metadata and summary views expose:
 - some APIs have ambiguous ownership between application logic and operational tooling
 - support-based lowering for `Supported` features is intentionally optimistic and should still be validated against customer semantics
 - hotspot ranking depends on observed profile samples, so poor sampling will skew priorities
+- assessment confidence should depend on evidence source quality, not only on observed counts
+- `LOG_ONLY` and `METRICS_ONLY` style collection should be treated as lower-fidelity evidence than `PROFILE_ONLY`
+- when collector-lite introduces multi-strategy collection, the assessment output must preserve `requested_strategy`, `effective_source`, and source-derived confidence
