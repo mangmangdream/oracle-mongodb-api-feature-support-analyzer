@@ -12,7 +12,7 @@ This means the usage analysis flow is no longer a standalone report-only feature
 
 ## Current User Flow
 
-1. User first syncs Oracle official documentation in the `文档同步` tab.
+1. User first syncs Oracle official documentation in the `API 基准` tab.
 2. User opens `MongoDB Usage 分析`.
 3. User enters a MongoDB URI and may optionally fill a `Database` input.
 4. User optionally fills a start time, end time, and sample limit.
@@ -302,12 +302,26 @@ The mapped output uses:
 
 If no Oracle row matches, the feature stays `Unknown`.
 
+## Baseline Dependency
+
+Usage analysis still evaluates observed workload against the Oracle compatibility main table. The new MongoDB API baseline does not replace the usage-assessment path.
+
+The current split is:
+
+- `API 基准` page
+  - primary table: `MongoDB API baseline + Oracle compatibility mapping`
+  - auxiliary Oracle view: `Feature Support 明细与覆盖规则`
+- `MongoDB Usage 分析` page
+  - keeps using Oracle-compatible support rows plus migration rules for support/complexity assessment
+  - only shows related baseline rows as reference, not the full baseline table
+
+This keeps migration assessment centered on Oracle compatibility while allowing the app to expose MongoDB APIs that are not covered by the Oracle main table.
+
 ## Current UI Surfaces
 
 The current usage page is organized into:
 
 - `采集概览`
-- `API 基准`
 - `实际使用 API`
 
 `采集概览` shows instance-level and database-level collection metadata, including the requested strategy, resolved strategy, effective source, fallback chain, and database scope.
@@ -318,8 +332,8 @@ After a successful run, the right-side panel renders:
 - Oracle target version and deployment controls
 - usage summary cards
 - filter controls
-- `API 基准` tab
 - `实际使用 API` tab
+- related baseline comparison inside `实际使用 API`
 - evidence samples for the selected workload row
 - HTML and Excel export actions
 - cache load and cache clear actions

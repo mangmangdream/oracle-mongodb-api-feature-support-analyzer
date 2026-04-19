@@ -36,6 +36,8 @@ From the synced Oracle `Feature Support` detail dataset:
 - `oracle_category`
 - `oracle_feature`
 
+The app now also builds a separate `MongoDB API baseline + Oracle compatibility mapping` for the `API 基准` page. That baseline is a catalog and reference surface. The migration assessment engine still consumes Oracle-compatible support rows from the usage-analysis path and does not switch to the baseline as its primary scoring input.
+
 ### 3. Built-in rules
 
 Loaded from:
@@ -194,27 +196,29 @@ The resulting usage detail dataset includes:
 
 ## Current UI Surfaces
 
-Migration assessment is rendered inside `MongoDB Usage 分析` and is split into two tabs:
+Migration assessment is rendered primarily inside `MongoDB Usage 分析`, while the `API 基准` page exposes the full MongoDB baseline and its Oracle compatibility mapping.
 
-- `API 基准`
+Within `MongoDB Usage 分析`, the current right-side panel is organized as:
+
+- `采集概览`
 - `实际使用 API`
 
-### `API 基准`
+### `API 基准` page
 
-This tab shows the Oracle catalog baseline enriched with migration classification. It currently supports:
+The separate `API 基准` page now shows:
 
-- total API counts and observed-in-profile counts
-- effective migration necessity
-- effective complexity
-- observed usage counts and command contexts
+- a full MongoDB API baseline
+- Oracle compatibility mapping attached to each MongoDB API
+- Oracle `Feature Support` main-table browsing under `Feature Support 明细与覆盖规则`
 - inline editing for override complexity and override reason
 - saving overrides back to `customer_overrides.csv`
 
-### `实际使用 API`
+### `MongoDB Usage 分析`
 
-This tab focuses on observed workload APIs and currently exposes:
+The usage page still focuses on observed workload APIs. It currently supports:
 
 - actual used API counts
+- related baseline comparison against the Oracle-compatible catalog rows
 - high-complexity counts
 - hotspot counts
 - migration necessity

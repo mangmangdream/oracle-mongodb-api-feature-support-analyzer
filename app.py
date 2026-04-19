@@ -34,6 +34,7 @@ from src.oracle_feature_support.mongodb_testkit import (
 from src.oracle_feature_support.mongodb_reference import (
     ABOUT_URL,
     MONGODB_REFERENCE_SOURCES,
+    build_mongodb_api_baseline_assets,
     enrich_feature_support_detail,
     load_mongodb_reference_catalog,
     load_mongodb_reference_metadata,
@@ -1266,6 +1267,16 @@ def _persist_oracle_cache(
     )
     (output_dir / "feature_support_report.html").write_text(report_html, encoding="utf-8")
     (output_dir / "feature_support_analysis.xlsx").write_bytes(workbook_bytes)
+    for file_name in [
+        "mongodb_api_baseline.csv",
+        "oracle_compat_mapping.csv",
+        "mongodb_api_baseline_metadata.json",
+        "mongodb_reference_catalog.csv",
+        "mongodb_reference_metadata.json",
+    ]:
+        source_path = Path("outputs") / file_name
+        if source_path.exists():
+            shutil.copy2(source_path, output_dir / file_name)
     _prune_output_dirs("feature_support_*", keep=10)
     return output_dir
 
@@ -1774,6 +1785,9 @@ def _filter_baseline_df(
                 "oracle_support_since",
                 "oracle_support_statuses",
                 "mongo_short_description",
+                "source_group",
+                "baseline_source_kind",
+                "oracle_uncovered_reason",
                 "effective_complexity",
                 necessity_column,
                 "complexity_explanation",
@@ -1927,6 +1941,11 @@ def _baseline_display_columns(show_advanced: bool) -> list[str]:
         "oracle_section",
         "oracle_support_statuses",
         "mongo_short_description",
+        "source_group",
+        "mongo_doc_url",
+        "baseline_source_kind",
+        "oracle_matched",
+        "oracle_uncovered_reason",
         "observed_in_profile",
         "observed_usage_count",
         "observed_command_contexts",
@@ -2004,6 +2023,152 @@ def _build_catalog_usage_df(detail_df: pd.DataFrame) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows)
+
+
+def _build_api_baseline_usage_df(
+    baseline_df: pd.DataFrame,
+    mapping_df: pd.DataFrame,
+    oracle_target_version: str,
+    oracle_target_mode: str,
+) -> pd.DataFrame:
+    if baseline_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "feature_type",
+                "feature_name",
+                "command_name",
+                "op_type",
+                "database",
+                "collection",
+                "usage_count",
+                "first_seen",
+                "last_seen",
+                "max_duration_ms",
+                "sample_path",
+                "sample_value",
+                "oracle_support_status",
+                "oracle_support_since",
+                "oracle_category",
+                "mongo_short_description",
+            ]
+        )
+
+    mapping_rows = mapping_df.copy() if not mapping_df.empty else pd.DataFrame()
+    if mapping_rows.empty:
+        mapping_rows = baseline_df[["feature_type", "feature_name"]].copy()
+        mapping_rows["oracle_matched"] = False
+        mapping_rows["oracle_section"] = ""
+        mapping_rows["oracle_support_since"] = ""
+        mapping_rows["oracle_uncovered_reason"] = "oracle_mapping_not_built"
+
+    merged = mapping_rows.merge(
+        baseline_df,
+        on=["feature_type", "feature_name"],
+        how="left",
+        suffixes=("", "_baseline"),
+    )
+    rows: list[dict[str, object]] = []
+    for _, row in merged.iterrows():
+        feature_type = _safe_feature_text(row.get("feature_type", ""))
+        feature_name = _safe_feature_text(row.get("feature_name", ""))
+        if not feature_type or not feature_name:
+            continue
+        if feature_type == "command":
+            command_name = feature_name
+        elif feature_type == "stage":
+            command_name = "aggregate"
+        else:
+            command_name = ""
+        oracle_support_since = _safe_feature_text(row.get("oracle_support_since", ""))
+        oracle_support_status = (
+            _effective_oracle_support_status(
+                oracle_support_since,
+                oracle_target_version,
+                oracle_target_mode,
+            )
+            if oracle_support_since
+            else "Unknown"
+        )
+        rows.append(
+            {
+                "feature_type": feature_type,
+                "feature_name": feature_name,
+                "command_name": command_name,
+                "op_type": "",
+                "database": "",
+                "collection": "",
+                "usage_count": 1,
+                "first_seen": "",
+                "last_seen": "",
+                "max_duration_ms": None,
+                "sample_path": "",
+                "sample_value": "",
+                "oracle_support_status": oracle_support_status,
+                "oracle_support_since": oracle_support_since,
+                "oracle_category": _safe_feature_text(row.get("oracle_section", "")),
+                "mongo_short_description": _safe_feature_text(row.get("mongo_short_description", "")),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _build_joined_api_baseline_df(
+    baseline_source_df: pd.DataFrame,
+    mapping_df: pd.DataFrame,
+    assessed_baseline_df: pd.DataFrame,
+) -> pd.DataFrame:
+    if assessed_baseline_df.empty:
+        return assessed_baseline_df.copy()
+
+    merged = assessed_baseline_df.merge(
+        baseline_source_df[
+            [
+                column
+                for column in [
+                    "feature_type",
+                    "feature_name",
+                    "source_group",
+                    "mongodb_category",
+                    "mongo_short_description",
+                    "mongo_doc_url",
+                    "baseline_source_kind",
+                    "baseline_source_ref",
+                    "admin_operational_flag",
+                    "ignore_candidate_from_source",
+                    "deprecated_flag",
+                    "availability_notes",
+                ]
+                if column in baseline_source_df.columns
+            ]
+        ].drop_duplicates(subset=["feature_type", "feature_name"]),
+        on=["feature_type", "feature_name"],
+        how="left",
+        suffixes=("", "_baseline"),
+    )
+    if not mapping_df.empty:
+        mapping_lookup = (
+            mapping_df.groupby(["feature_type", "feature_name"], dropna=False, as_index=False)
+            .agg(
+                oracle_matched=("oracle_matched", "max"),
+                oracle_uncovered_reason=("oracle_uncovered_reason", lambda values: ", ".join(sorted({str(v) for v in values if str(v).strip()}))),
+            )
+        )
+        merged = merged.merge(
+            mapping_lookup,
+            on=["feature_type", "feature_name"],
+            how="left",
+        )
+    if "mongo_short_description_baseline" in merged.columns:
+        merged["mongo_short_description"] = merged["mongo_short_description"].where(
+            merged["mongo_short_description"].fillna("").astype(str).str.strip().ne(""),
+            merged["mongo_short_description_baseline"],
+        )
+        merged = merged.drop(columns=["mongo_short_description_baseline"])
+    if "oracle_matched" not in merged.columns:
+        merged["oracle_matched"] = False
+    if "oracle_uncovered_reason" not in merged.columns:
+        merged["oracle_uncovered_reason"] = ""
+    return merged
 
 
 def _format_report_table(df: pd.DataFrame, link_columns: set[str] | None = None) -> str:
@@ -2112,18 +2277,15 @@ def _build_offline_report_html(
     filtered_detail_df: pd.DataFrame,
     oracle_target_version: str,
     oracle_target_mode: str,
+    baseline_df: pd.DataFrame | None = None,
+    baseline_metadata: dict[str, object] | None = None,
 ) -> str:
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     oracle_target_mode_display = _oracle_target_mode_label(oracle_target_mode)
     detail_display_df = _prepare_detail_display_df(filtered_detail_df, include_section=True)
     detail_columns = [col for col in detail_display_df.columns if col != "section"]
-    current_ruleset = load_migration_rules()
-    offline_catalog_usage_df = _build_catalog_usage_df(filtered_detail_df)
-    offline_baseline_result = assess_migration_complexity(
-        offline_catalog_usage_df,
-        current_ruleset,
-    )
-    offline_baseline_df = offline_baseline_result.baseline_df.fillna("")
+    offline_baseline_df = (baseline_df.copy() if baseline_df is not None else pd.DataFrame()).fillna("")
+    baseline_metadata = baseline_metadata or {}
     oracle_doc_source_url = str(doc_metadata.get("doc_source_url", "") or INDEX_URL)
     mongodb_manual_about_url = str(reference_metadata.get("mongodb_manual_about_url", "") or ABOUT_URL)
     offline_doc_link_urls = {
@@ -2170,9 +2332,15 @@ def _build_offline_report_html(
         "mongodbSyncedAt": str(reference_metadata.get("synced_at", "未知")),
         "mongodbNewEntryCount": int(reference_metadata.get("new_entry_count", 0) or 0),
         "mongodbUpdatedEntryCount": int(reference_metadata.get("updated_entry_count", 0) or 0),
+        "mongodbBaselineEntryCount": int(baseline_metadata.get("entry_count", 0) or 0),
+        "mongodbOracleMatchedCount": int(baseline_metadata.get("oracle_matched_count", 0) or 0),
+        "mongodbOracleUncoveredCount": int(baseline_metadata.get("oracle_uncovered_count", 0) or 0),
         "mongodbDescriptionCoverage": int(
-            filtered_detail_df["mongo_short_description"].fillna("").astype(str).str.strip().ne("").sum()
-        ) if "mongo_short_description" in filtered_detail_df.columns else 0,
+            offline_baseline_df["mongo_short_description"].fillna("").astype(str).str.strip().ne("").sum()
+        ) if "mongo_short_description" in offline_baseline_df.columns else (
+            int(filtered_detail_df["mongo_short_description"].fillna("").astype(str).str.strip().ne("").sum())
+            if "mongo_short_description" in filtered_detail_df.columns else 0
+        ),
         "oracleTargetVersion": oracle_target_version,
         "oracleTargetMode": oracle_target_mode_display,
         "detailColumns": detail_columns,
@@ -2690,14 +2858,15 @@ def _build_offline_report_html(
     </section>
 
     <section class="panel">
-      <h2>迁移与覆盖</h2>
+      <h2>MongoDB API 基线与 Oracle 兼容性映射</h2>
       <div class="meta-grid">
         <div class="meta-card"><div class="label">全部唯一 API 数量</div><div class="value" id="baseline-total-count">0</div></div>
-        <div class="meta-card"><div class="label">Supported</div><div class="value" id="baseline-supported-count">0</div></div>
+        <div class="meta-card"><div class="label">Oracle 已映射</div><div class="value" id="baseline-matched-count">0</div></div>
+        <div class="meta-card"><div class="label">Oracle 未覆盖</div><div class="value" id="baseline-uncovered-count">0</div></div>
         <div class="meta-card"><div class="label">高复杂度 API</div><div class="value" id="baseline-high-count">0</div></div>
         <div class="meta-card"><div class="label">MongoDB 说明覆盖</div><div class="value" id="baseline-description-count">0</div></div>
       </div>
-      <div class="note">离线报告中这里只展示当前 Feature Support 明细对应的迁移基准视图，不提供覆盖规则编辑。</div>
+      <div class="note">离线报告中这里展示 MongoDB API 基线及其 Oracle 兼容性映射视图，不提供覆盖规则编辑。</div>
       <div id="baseline-table" class="table-wrap"></div>
     </section>
   </div>
@@ -2967,6 +3136,21 @@ def _build_offline_report_html(
           percentage: percentage(count, rows.length),
         }}))
         .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label, "zh-CN"));
+    }}
+
+    function uniqueApiCount(rows) {{
+      if (!rows.length) {{
+        return 0;
+      }}
+      const keys = new Set();
+      rows.forEach((row) => {{
+        const scopeKey = String(row.oracle_section || row.oracle_category || "").trim();
+        const supportSince = String(row.oracle_support_since || "").trim();
+        const featureType = String(row.feature_type || "").trim();
+        const featureName = String(row.feature_name || "").trim();
+        keys.add([featureType, featureName, scopeKey, supportSince].join("||"));
+      }});
+      return keys.size;
     }}
 
     function createTable(columns, rows, linkColumns = []) {{
@@ -3306,8 +3490,11 @@ def _build_offline_report_html(
     function renderBaseline() {{
       const rows = Array.isArray(reportData.baselineRows) ? reportData.baselineRows : [];
       document.getElementById("baseline-total-count").textContent = String(uniqueApiCount(rows));
-      document.getElementById("baseline-supported-count").textContent = String(
-        uniqueApiCount(rows.filter((row) => String(row.oracle_support_statuses || "").includes("Supported")))
+      document.getElementById("baseline-matched-count").textContent = String(
+        uniqueApiCount(rows.filter((row) => row.oracle_matched === true || ["true", "1"].includes(String(row.oracle_matched || "").toLowerCase())))
+      );
+      document.getElementById("baseline-uncovered-count").textContent = String(
+        uniqueApiCount(rows.filter((row) => !(row.oracle_matched === true || ["true", "1"].includes(String(row.oracle_matched || "").toLowerCase()))))
       );
       document.getElementById("baseline-high-count").textContent = String(
         uniqueApiCount(rows.filter((row) => ["High", "Blocker"].includes(String(row.effective_complexity || ""))))
@@ -3318,14 +3505,20 @@ def _build_offline_report_html(
       const columns = [
         "feature_type",
         "feature_name",
+        "source_group",
+        "baseline_source_kind",
+        "oracle_matched",
+        "oracle_uncovered_reason",
         "effective_migration_necessity",
         "oracle_support_since",
         "oracle_support_statuses",
+        "oracle_support_status",
         "effective_complexity",
         "complexity_explanation",
         "mongo_short_description",
+        "mongo_doc_url",
       ].filter((column) => rows.some((row) => String(row[column] ?? "").trim() !== ""));
-      document.getElementById("baseline-table").innerHTML = createTable(columns, rows);
+      document.getElementById("baseline-table").innerHTML = createTable(columns, rows, ["mongo_doc_url"]);
     }}
 
     function applyFilters() {{
@@ -3460,7 +3653,11 @@ def _build_offline_report_html(
 
     function init() {{
       const oracleVersions = ["任意版本", ...availableOracleVersions()];
+      const oracleModes = ["任意部署方式", "op", "no-op"];
       oracleVersionFilter.innerHTML = oracleVersions
+        .map((value) => `<option value="${{escapeHtml(value)}}">${{escapeHtml(value)}}</option>`)
+        .join("");
+      oracleModeFilter.innerHTML = oracleModes
         .map((value) => `<option value="${{escapeHtml(value)}}">${{escapeHtml(value)}}</option>`)
         .join("");
       oracleVersionFilter.value = reportData.oracleTargetVersion || "任意版本";
@@ -4084,19 +4281,28 @@ def _build_usage_offline_report_html(
       document.getElementById("metric-baseline-unsupported").textContent = String(
         uniqueApiCount(rows.filter((row) => String(row.oracle_support_statuses || "").includes("Not Supported")))
       );
-      const columns = [
+      const coreColumns = [
         "feature_type",
         "feature_name",
         "effective_migration_necessity",
         "oracle_support_since",
-        "oracle_support_statuses",
         "effective_complexity",
         "complexity_explanation",
-        "observed_usage_count",
+      ];
+      const advancedColumns = [
+        "oracle_section",
+        "oracle_support_statuses",
+        "mongo_short_description",
+        "observed_in_profile",
         "observed_usage_count",
         "observed_command_contexts",
-      ].filter((column) => rows.some((row) => String(row[column] ?? "").trim() !== ""));
-      document.getElementById("baseline-table").innerHTML = createTable(columns, rows);
+        "mongo_doc_url",
+      ];
+      const candidateColumns = reportData.showBaselineAdvancedColumns
+        ? coreColumns.concat(advancedColumns)
+        : coreColumns;
+      const columns = candidateColumns.filter((column) => rows.some((row) => String(row[column] ?? "").trim() !== ""));
+      document.getElementById("baseline-table").innerHTML = createTable(columns, rows, ["mongo_doc_url"]);
     }}
     function renderInstanceLevelRows() {{
       const rows = Array.isArray(reportData.instanceLevelRows) ? reportData.instanceLevelRows : [];
@@ -5513,6 +5719,31 @@ with doc_right_panel:
                     * 100
                 ).round(2)
 
+        current_ruleset = load_migration_rules()
+        baseline_build_result = build_mongodb_api_baseline_assets(
+            reference_df=reference_df,
+            detail_df=effective_detail_df,
+            manual_version=str(reference_metadata.get("mongodb_manual_version", "") or ""),
+        )
+        api_baseline_source_df = baseline_build_result.baseline_df.copy()
+        oracle_mapping_df = baseline_build_result.mapping_df.copy()
+        baseline_metadata = baseline_build_result.metadata
+        api_baseline_usage_df = _build_api_baseline_usage_df(
+            api_baseline_source_df,
+            oracle_mapping_df,
+            selected_oracle_target_version,
+            selected_oracle_target_mode,
+        )
+        api_baseline_result = assess_migration_complexity(
+            api_baseline_usage_df,
+            current_ruleset,
+        )
+        api_baseline_df = _build_joined_api_baseline_df(
+            api_baseline_source_df,
+            oracle_mapping_df,
+            api_baseline_result.baseline_df,
+        )
+
         offline_report_html = _build_offline_report_html(
             output_dir=output_dir,
             doc_metadata=doc_metadata,
@@ -5523,89 +5754,23 @@ with doc_right_panel:
             filtered_detail_df=current_filtered_detail_df,
             oracle_target_version=selected_oracle_target_version,
             oracle_target_mode=selected_oracle_target_mode,
+            baseline_df=api_baseline_df,
+            baseline_metadata=baseline_metadata,
         )
         oracle_workbook_bytes = _build_excel_workbook_bytes(
             [
                 ("detail", current_filtered_detail_df),
                 ("summary", current_status_summary_display_df),
+                ("mongodb_api_baseline", api_baseline_df),
             ]
         )
-        current_ruleset = load_migration_rules()
-        catalog_usage_df = _build_catalog_usage_df(effective_detail_df)
-        catalog_baseline_result = assess_migration_complexity(
-            catalog_usage_df,
-            current_ruleset,
-        )
-        api_baseline_df = catalog_baseline_result.baseline_df
-        if not api_baseline_df.empty:
-            description_lookup = (
-                effective_detail_df.assign(
-                    baseline_feature_type=lambda df: df.apply(
-                        lambda item: "command"
-                        if _safe_feature_text(item.get("Command", ""))
-                        else (
-                            "stage"
-                            if _safe_feature_text(item.get("Stage", ""))
-                            else ("operator" if _safe_feature_text(item.get("Operator", "")) else "")
-                        ),
-                        axis=1,
-                    ),
-                    baseline_feature_name=lambda df: df.apply(
-                        lambda item: _safe_feature_text(item.get("Command", ""))
-                        or _safe_feature_text(item.get("Stage", ""))
-                        or _safe_feature_text(item.get("Operator", "")),
-                        axis=1,
-                    ),
-                )[
-                    [
-                        "baseline_feature_type",
-                        "baseline_feature_name",
-                        "section",
-                        "mongo_short_description",
-                        "normalized_status",
-                    ]
-                ]
-                .drop_duplicates(subset=["baseline_feature_type", "baseline_feature_name"])
-                .rename(
-                    columns={
-                        "baseline_feature_type": "feature_type",
-                        "baseline_feature_name": "feature_name",
-                        "section": "oracle_section",
-                        "normalized_status": "oracle_support_statuses",
-                    }
-                )
-            )
-            api_baseline_df = api_baseline_df.merge(
-                description_lookup,
-                on=["feature_type", "feature_name"],
-                how="left",
-                suffixes=("", "_lookup"),
-            )
-            if "oracle_section_lookup" in api_baseline_df.columns:
-                api_baseline_df["oracle_section"] = api_baseline_df["oracle_section"].where(
-                    api_baseline_df["oracle_section"].fillna("").astype(str).str.strip().ne(""),
-                    api_baseline_df["oracle_section_lookup"],
-                )
-                api_baseline_df = api_baseline_df.drop(columns=["oracle_section_lookup"])
-            if "oracle_support_statuses_lookup" in api_baseline_df.columns:
-                api_baseline_df["oracle_support_statuses"] = api_baseline_df["oracle_support_statuses"].where(
-                    api_baseline_df["oracle_support_statuses"].fillna("").astype(str).str.strip().ne(""),
-                    api_baseline_df["oracle_support_statuses_lookup"],
-                )
-                api_baseline_df = api_baseline_df.drop(columns=["oracle_support_statuses_lookup"])
-            if "mongo_short_description_lookup" in api_baseline_df.columns:
-                api_baseline_df["mongo_short_description"] = api_baseline_df["mongo_short_description"].where(
-                    api_baseline_df["mongo_short_description"].fillna("").astype(str).str.strip().ne(""),
-                    api_baseline_df["mongo_short_description_lookup"],
-                )
-                api_baseline_df = api_baseline_df.drop(columns=["mongo_short_description_lookup"])
 
         st.markdown("#### API 基准")
         st.caption("从最新的 Oracle 与 MongoDB 参考信息生成当前分析基线，作为后续 MongoDB Usage 分析的参照。")
 
         overview_cols = st.columns(4, gap="medium")
         with overview_cols[0]:
-            st.metric("明细记录数", len(effective_detail_df))
+            st.metric("MongoDB API 基线", int(baseline_metadata.get("entry_count", len(api_baseline_source_df)) or 0))
         with overview_cols[1]:
             st.metric("Oracle 文档版本时间", doc_metadata.get("doc_version_date", "") or "未解析到")
         with overview_cols[2]:
@@ -6028,7 +6193,7 @@ with doc_right_panel:
                     else:
                         if st.session_state.mongo_usage_override_save_notice:
                             st.success(st.session_state.mongo_usage_override_save_notice)
-                        st.caption("在同一处查看 Feature Support 基准、MongoDB 参考说明和客户覆盖规则。")
+                        st.caption("在同一处查看 MongoDB API 基线、Oracle 兼容性映射和客户覆盖规则。")
                         baseline_filter_cols = st.columns([1.2, 1, 1, 1], gap="medium")
                         with baseline_filter_cols[0]:
                             baseline_keyword = st.text_input(
@@ -6096,7 +6261,7 @@ with doc_right_panel:
                         )
                         baseline_metric_cols = st.columns(3, gap="medium")
                         with baseline_metric_cols[0]:
-                            st.metric("Feature Support 明细记录数", len(effective_detail_df))
+                            st.metric("MongoDB API 基线记录数", int(baseline_metadata.get("entry_count", len(api_baseline_source_df)) or 0))
                         with baseline_metric_cols[1]:
                             st.metric("全部唯一 API 数量", _unique_api_count(baseline_source_df))
                         with baseline_metric_cols[2]:

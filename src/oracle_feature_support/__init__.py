@@ -13,7 +13,10 @@ from .mongodb_profile_reader import (
     test_mongodb_connection,
 )
 from .mongodb_reference import (
+    build_mongodb_api_baseline_assets,
     enrich_feature_support_detail,
+    load_mongodb_api_baseline,
+    load_mongodb_api_baseline_metadata,
     load_mongodb_reference_catalog,
     sync_mongodb_reference_catalog,
 )
@@ -68,7 +71,10 @@ __all__ = [
     "build_migration_hotspots",
     "save_customer_overrides",
     "write_usage_analysis_outputs",
+    "build_mongodb_api_baseline_assets",
     "sync_mongodb_reference_catalog",
+    "load_mongodb_api_baseline",
+    "load_mongodb_api_baseline_metadata",
     "load_mongodb_reference_catalog",
     "enrich_feature_support_detail",
 ]
